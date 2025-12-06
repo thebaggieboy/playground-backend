@@ -32,7 +32,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.sites',
-     'daphne',
+    'daphne',
     'django.contrib.staticfiles',
     'accounts.apps.AccountConfig',
     'model.apps.ModelConfig',
