@@ -20,7 +20,7 @@ SECRET_KEY = 'django-insecure-kxwnewxb8gjz+@*vy^vgr87)8_gak4myp1+%5xmciw52jxxss%
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['playground-backend-1t0f.onrender.com', "localhost"]
 
 
 # Application definition
@@ -178,6 +178,8 @@ CSRF_TRUSTED_ORIGINS = [
     'http://127.0.0.1:8000',
     'http://localhost:3000',
     'http://127.0.0.1:3000',
+    'https://playground-backend-1t0f.onrender.com'
+    
 ]
 
 REST_AUTH = {
@@ -229,12 +231,14 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
     'https://api.cloudinary.com'
+    'https://playground-backend-1t0f.onrender.com'
 ]
 
 CORS_ORIGIN_WHITELIST = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
     'https://api.cloudinary.com'
+    'https://playground-backend-1t0f.onrender.com'
 ]
 
 CORS_ALLOW_CREDENTIALS = True
