@@ -1,0 +1,43 @@
+# Exported from Render on 2025-12-03T04:17:39Z
+version: "1"
+projects:
+- name: Playground
+  environments:
+  - name: Playground
+    services:
+    - type: web
+      name: playground-backend
+      runtime: docker
+      repo: https://github.com/thebaggieboy/playground-backend
+      plan: free
+      envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: CORS_ALLOW_ALL_ORIGINS
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_USE_TLS
+        sync: false
+      - key: EMAIL_PORT
+        sync: false
+      - key: EMAIL_HOST
+        sync: false
+      - key: DATABASE_SSL_REQUIRE
+        sync: false
+      - key: DATABASE_CONN_MAX_AGE
+        sync: false
+      - key: DEBUG
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      region: oregon
+      dockerContext: .
+      dockerfilePath: ./Dockerfile
+      autoDeployTrigger: commit
