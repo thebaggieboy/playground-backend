@@ -230,14 +230,14 @@ CORS_ALLOW_HEADERS = [
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
-    'https://api.cloudinary.com'
+    'https://api.cloudinary.com',
     'https://playground-backend-1t0f.onrender.com'
 ]
 
 CORS_ORIGIN_WHITELIST = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
-    'https://api.cloudinary.com'
+    'https://api.cloudinary.com',
     'https://playground-backend-1t0f.onrender.com'
 ]
 
