@@ -13,7 +13,7 @@ class UserCreateSerializer(BaseUserCreateSerializer):
 class UserSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = AccountUser
-        fields = ['id','email', 'first_name', 'last_name', 'mobile_number', 'billing_address', 'state', 'city', 'zip', 'display_picture', 'following', 'wish_list', 'orders', 'is_active', 'staff', 'admin']
+        fields = ['id','email', 'first_name', 'last_name', 'mobile_number', 'billing_address', 'state', 'city', 'zip', 'display_picture', 'following',  'is_active', 'is_verified', 'staff', 'admin']
 
 
 class ProfileSerializer(serializers.HyperlinkedModelSerializer):
