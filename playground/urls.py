@@ -3,6 +3,8 @@ from django.contrib import admin
 from rest_framework.routers import DefaultRouter
 from django.conf import settings
 from django.conf.urls.static import static
+from accounts.views import UserViewSet
+
 from model.views import (
     FinancialModelViewSet,
     ScenarioViewSet,
@@ -12,6 +14,7 @@ from model.views import (
 )
 
 router = DefaultRouter()
+router.register(r'users', UserViewSet)
 router.register(r'models', FinancialModelViewSet, basename='financialmodel')
 router.register(r'scenarios', ScenarioViewSet, basename='scenario')
 router.register(r'results', CalculatedStatementViewSet, basename='results')
