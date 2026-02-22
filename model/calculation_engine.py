@@ -107,11 +107,11 @@ class CalculationEngine:
             log.duration_seconds = Decimal(str(duration))
             log.save()
             
-            return {
+            return self._prepare_for_json({
                 'status': 'success',
                 'periods_calculated': len(self.periods),
                 'duration_seconds': duration
-            }
+            })
             
         except Exception as e:
             logger.error(f"Calculation error for scenario {scenario.id}: {str(e)}")
@@ -128,6 +128,16 @@ class CalculationEngine:
             log.save()
             
             raise
+
+    def _prepare_for_json(self, data):
+        """Recursively convert Decimal to float for JSON serialization"""
+        if isinstance(data, dict):
+            return {k: self._prepare_for_json(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._prepare_for_json(item) for item in data]
+        elif isinstance(data, Decimal):
+            return float(data)
+        return data
     
     def _generate_periods(self) -> List[str]:
         """

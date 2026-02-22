@@ -417,6 +417,10 @@ class FinancialModelCreateSerializer(serializers.ModelSerializer):
         
         return model
 
+    def to_representation(self, instance):
+        return FinancialModelDetailSerializer(instance, context=self.context).data
+
+
 
 # ============================================================================
 # OUTPUT SERIALIZERS - Calculated Results
