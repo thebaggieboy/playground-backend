@@ -1,11 +1,13 @@
-from django.shortcuts import render
-from .models import  Reports
-from django.conf import settings
-from dj_rest_auth.registration.views import SocialLoginView
-from rest_framework import viewsets
+from rest_framework import viewsets, permissions
+from .models import Report
 from .serializers import ReportSerializer
 
 class ReportViewSet(viewsets.ModelViewSet):
-    queryset = Reports.objects.all()
     serializer_class = ReportSerializer
+    permission_classes = [permissions.IsAuthenticated]
     
+    def get_queryset(self):
+        return Report.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)

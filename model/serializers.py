@@ -463,6 +463,7 @@ class TemplateCreateFromScenarioSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
     is_public = serializers.BooleanField(default=False)
     scenario_id = serializers.IntegerField()
+    project_type = serializers.CharField(max_length=50, required=False)
     
     def validate_scenario_id(self, value):
         """Ensure scenario exists and user has access"""
@@ -487,7 +488,7 @@ class TemplateCreateFromScenarioSerializer(serializers.Serializer):
         template = ModelTemplate.objects.create(
             name=validated_data['name'],
             description=validated_data.get('description', ''),
-            project_type=scenario.model.project_type,
+            project_type=validated_data.get('project_type') or scenario.model.project_type,
             created_by=user,
             is_public=validated_data.get('is_public', False),
             template_data=template_data

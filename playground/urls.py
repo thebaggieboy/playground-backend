@@ -12,6 +12,7 @@ from model.views import (
     ModelTemplateViewSet,
     CalculationLogViewSet
 )
+from reports.views import ReportViewSet
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet)
@@ -20,6 +21,7 @@ router.register(r'scenarios', ScenarioViewSet, basename='scenario')
 router.register(r'results', CalculatedStatementViewSet, basename='results')
 router.register(r'templates', ModelTemplateViewSet, basename='template')
 router.register(r'calculation-logs', CalculationLogViewSet, basename='calculationlog')
+router.register(r'reports', ReportViewSet, basename='report')
 
 urlpatterns = [
 

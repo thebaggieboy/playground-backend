@@ -3,6 +3,6 @@ from django.contrib import admin
 # Register your models here.
 
 
-from .models import Reports
+from .models import Report
 
-admin.site.register(Reports)
+admin.site.register(Report)
