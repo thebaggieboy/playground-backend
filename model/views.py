@@ -7,7 +7,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import FileResponse, HttpResponse
-from django.db import transaction
+from django.db import transaction, models
 from django.utils import timezone
 from datetime import datetime
 import io
