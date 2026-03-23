@@ -172,6 +172,10 @@ class CalculationEngine:
         except: self.debt = None
         try: self.valuation = self.scenario.exit_valuation
         except: self.valuation = None
+        try: self.working_capital = getattr(self.scenario, 'working_capital', None)
+        except: self.working_capital = None
+        try: self.dividend_policy = getattr(self.scenario, 'dividend_policy', None)
+        except: self.dividend_policy = None
         try: self.revenue_products = list(self.scenario.revenue_products.all())
         except: self.revenue_products = []
         try: self.dep_schedules = list(self.scenario.depreciation_schedules.all())
@@ -683,8 +687,34 @@ class CalculationEngine:
             # Add back Depreciation (non-cash)
             cfs_data['Depreciation'] = income_statement['Depreciation']
             
-            # Changes in Working Capital (simplified - would need more detail)
+            # Changes in Working Capital
             changes_in_wc = {p: Decimal('0') for p in self.periods}
+            wc_assets = {p: Decimal('0') for p in self.periods}
+            wc_liabilities = {p: Decimal('0') for p in self.periods}
+            
+            if getattr(self, 'working_capital', None):
+                rec_days = Decimal(str(self.working_capital.receivables_days))
+                pay_days = Decimal(str(self.working_capital.payables_days))
+                inv_days = Decimal(str(self.working_capital.inventory_days))
+                
+                prev_nwc = Decimal('0')
+                for period in self.periods:
+                    revenue = income_statement['Total Revenue'].get(period, Decimal('0'))
+                    opex = income_statement['Total Operating Expenses'].get(period, Decimal('0'))
+                    
+                    ar = revenue * rec_days / Decimal('365')
+                    inv = opex * inv_days / Decimal('365')
+                    ap = opex * pay_days / Decimal('365')
+                    
+                    wc_assets[period] = (ar + inv).quantize(Decimal('0.01'))
+                    wc_liabilities[period] = ap.quantize(Decimal('0.01'))
+                    
+                    current_nwc = ar + inv - ap
+                    changes_in_wc[period] = (current_nwc - prev_nwc).quantize(Decimal('0.01'))
+                    prev_nwc = current_nwc
+            
+            self._wc_assets = wc_assets
+            self._wc_liabilities = wc_liabilities
             cfs_data['Changes in Working Capital'] = changes_in_wc
             
             # Cash Flow from Operations
@@ -717,27 +747,64 @@ class CalculationEngine:
             interest_cf = {p: -debt_schedule['Interest Expense'][p] for p in self.periods}
             cfs_data['Interest Paid'] = interest_cf
             
-            # Cash Flow from Financing
+            # Cash Flow from Financing & Net Cash Flow
             cff = {}
-            for period in self.periods:
-                cff[period] = (
-                    debt_schedule['Drawdowns'][period] +
-                    debt_repayment[period]
-                    # Interest is already deducted in Net Income (Operating CF). Do not deduct again here.
-                )
-            
-            cfs_data['Cash Flow from Financing'] = cff
-            
-            # Net Cash Flow
+            equity_drawdowns = {}
+            dividends_paid = {}
             net_cf = {}
             cash_balance = Decimal('0')
             cash_end = {}
             
             for period in self.periods:
-                net_cf[period] = cfo[period] + capex_cf[period] + cff[period]
+                # Calculate cash needs BEFORE equity funding and dividends
+                cash_needs = (
+                    cfo.get(period, Decimal('0')) + 
+                    capex_cf.get(period, Decimal('0')) + 
+                    debt_schedule['Drawdowns'].get(period, Decimal('0')) + 
+                    debt_repayment.get(period, Decimal('0'))
+                )
+                
+                # Check for dividends (only if net_income > 0)
+                net_income = income_statement['Net Income'].get(period, Decimal('0'))
+                dividend = Decimal('0')
+                if getattr(self, 'dividend_policy', None) and net_income > 0:
+                    payout = self.dividend_policy.dividend_payout_ratio_pct / Decimal('100')
+                    min_cash_req = self.dividend_policy.minimum_cash_before_dividend
+                    potential_dividend = net_income * payout
+                    
+                    # Available cash before equity = opening cash + net activities
+                    available_cash = cash_balance + cash_needs
+                    
+                    if available_cash > min_cash_req:
+                        dividend = min(potential_dividend, available_cash - min_cash_req)
+                
+                dividends_paid[period] = -dividend.quantize(Decimal('0.01'))
+                cash_needs += dividends_paid[period]  # Cash needs becomes more negative (or stays same)
+                
+                # If opening cash + cash_needs < 0, we need sponsor equity to plug the gap
+                cash_deficit = -(cash_balance + cash_needs)
+                
+                if cash_deficit > 0:
+                    equity_drawdown = cash_deficit
+                else:
+                    equity_drawdown = Decimal('0')
+                    
+                equity_drawdowns[period] = equity_drawdown
+                
+                cff[period] = (
+                    debt_schedule['Drawdowns'].get(period, Decimal('0')) +
+                    debt_repayment.get(period, Decimal('0')) +
+                    equity_drawdown + 
+                    dividends_paid[period]
+                )
+                
+                net_cf[period] = cfo.get(period, Decimal('0')) + capex_cf.get(period, Decimal('0')) + cff[period]
                 cash_balance += net_cf[period]
                 cash_end[period] = cash_balance
-            
+                
+            cfs_data['Dividends Paid'] = dividends_paid
+            cfs_data['Equity Drawdowns'] = equity_drawdowns
+            cfs_data['Cash Flow from Financing'] = cff
             cfs_data['Net Cash Flow'] = net_cf
             cfs_data['Cash Balance (End)'] = cash_end
             
@@ -772,11 +839,15 @@ class CalculationEngine:
             
             bs_data['Net Fixed Assets'] = net_fixed_assets
             
+            # Working Capital Assets
+            bs_data['Working Capital Assets'] = getattr(self, '_wc_assets', {p: Decimal('0') for p in self.periods})
+            
             # Total Assets
             total_assets = {}
             for period in self.periods:
                 total_assets[period] = (
                     bs_data['Cash'][period] +
+                    bs_data['Working Capital Assets'][period] +
                     net_fixed_assets[period]
                 )
             
@@ -786,22 +857,46 @@ class CalculationEngine:
             # Debt
             bs_data['Debt'] = debt_schedule['Closing Balance']
             
+            # Working Capital Liabilities
+            bs_data['Working Capital Liabilities'] = getattr(self, '_wc_liabilities', {p: Decimal('0') for p in self.periods})
+            
             # Total Liabilities
-            bs_data['Total Liabilities'] = debt_schedule['Closing Balance']
+            total_liabilities = {}
+            for period in self.periods:
+                total_liabilities[period] = (
+                    debt_schedule['Closing Balance'][period] +
+                    bs_data['Working Capital Liabilities'][period]
+                )
+            bs_data['Total Liabilities'] = total_liabilities
             
             # EQUITY
-            # Retained Earnings (cumulative net income)
+            # Retained Earnings (cumulative net income - dividends)
             retained_earnings = {}
             cumulative_ni = Decimal('0')
             
             for period in self.periods:
                 cumulative_ni += income_statement['Net Income'][period]
+                cumulative_ni += cash_flow_statement.get('Dividends Paid', {}).get(period, Decimal('0'))
                 retained_earnings[period] = cumulative_ni
             
             bs_data['Retained Earnings'] = retained_earnings
             
+            # Paid-In Capital (Cumulative Equity Drawdowns)
+            cumulative_equity = Decimal('0')
+            paid_in_capital = {}
+            
+            for period in self.periods:
+                cumulative_equity += cash_flow_statement.get('Equity Drawdowns', {}).get(period, Decimal('0'))
+                paid_in_capital[period] = cumulative_equity
+                
+            bs_data['Paid-In Capital'] = paid_in_capital
+            
             # Total Equity
-            bs_data['Total Equity'] = retained_earnings
+            total_equity = {}
+            for period in self.periods:
+                total_equity[period] = paid_in_capital[period] + retained_earnings[period]
+                
+            bs_data['Total Equity'] = total_equity
             
             # Balance Check: Assets = Liabilities + Equity
             balance_check = {}
@@ -928,10 +1023,12 @@ class CalculationEngine:
             valuation_params = self.valuation
             macro = self.macro
             
-            # Get Free Cash Flow
+            # Get Free Cash Flow (CFO + CFI) to correctly include CAPEX outlays in return metrics
             fcf_series = []
             for period in self.periods:
-                fcf = cash_flow_statement['Cash Flow from Operations'][period]
+                cfo = cash_flow_statement['Cash Flow from Operations'][period]
+                cfi = cash_flow_statement['Cash Flow from Investing'][period]
+                fcf = cfo + cfi
                 fcf_series.append(float(fcf))
             
             # NPV Calculation
