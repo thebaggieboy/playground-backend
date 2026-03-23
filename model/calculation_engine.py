@@ -7,7 +7,6 @@ Based on standard financial modeling practices
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timedelta
 from django.utils import timezone
-import numpy as np
 from typing import Dict, List
 import logging
 
@@ -32,19 +31,33 @@ class CalculationEngine:
         self.periods = []
         self.results = {}
         
-    def calculate_scenario(self, scenario: Scenario, user=None):
+        # Cached related models for sensitivity overrides
+        self.macro = None
+        self.project_info = None
+        self.opex = None
+        self.capex = None
+        self.tax = None
+        self.debt = None
+        self.valuation = None
+        self.revenue_products = []
+        self.dep_schedules = []
+        
+    def calculate_scenario(self, scenario: Scenario, user=None, save_results=True, overrides=None):
         """
         Main entry point for calculating a complete scenario
         Returns: dict with calculation results
         """
         self.scenario = scenario
+        self._prepare_scenario(overrides)
         
         # Create calculation log
-        log = CalculationLog.objects.create(
-            scenario=scenario,
-            triggered_by=user,
-            status='running'
-        )
+        log = None
+        if save_results:
+            log = CalculationLog.objects.create(
+                scenario=scenario,
+                triggered_by=user,
+                status='running'
+            )
         
         start_time = timezone.now()
         
@@ -94,18 +107,31 @@ class CalculationEngine:
             )
             
             # Step 12: Save all results
-            self._save_results(
-                income_statement, balance_sheet, cash_flow_statement,
-                ratios, valuation, debt_schedule
-            )
+            if save_results:
+                self._save_results(
+                    income_statement, balance_sheet, cash_flow_statement,
+                    ratios, valuation, debt_schedule
+                )
             
             # Update log
             end_time = timezone.now()
             duration = (end_time - start_time).total_seconds()
-            log.status = 'success'
-            log.completed_at = end_time
-            log.duration_seconds = Decimal(str(duration))
-            log.save()
+            
+            if log:
+                log.status = 'success'
+                log.completed_at = end_time
+                log.duration_seconds = Decimal(str(duration))
+                log.save()
+                
+            if not save_results:
+                return {
+                    'status': 'success',
+                    'npv': float(valuation.get('NPV', 0)),
+                    'irr': float(valuation.get('IRR (%)', 0)),
+                    'peak_revenue': float(max(income_statement.get('Total Revenue', {str(self.periods[0]): 0}).values())),
+                    'peak_ebitda': float(max(income_statement.get('EBITDA', {str(self.periods[0]): 0}).values())),
+                    'duration_seconds': duration
+                }
             
             return self._prepare_for_json({
                 'status': 'success',
@@ -117,17 +143,76 @@ class CalculationEngine:
             logger.error(f"Calculation error for scenario {scenario.id}: {str(e)}")
             
             # Update log
-            end_time = timezone.now()
-            duration = (end_time - start_time).total_seconds()
-            log.status = 'failed'
-            log.completed_at = end_time
-            log.duration_seconds = Decimal(str(duration))
-            log.error_message = str(e)
-            import traceback
-            log.error_traceback = traceback.format_exc()
-            log.save()
+            if log:
+                end_time = timezone.now()
+                duration = (end_time - start_time).total_seconds()
+                log.status = 'failed'
+                log.completed_at = end_time
+                log.duration_seconds = Decimal(str(duration))
+                log.error_message = str(e)
+                import traceback
+                log.error_traceback = traceback.format_exc()
+                log.save()
             
             raise
+
+    
+    def _prepare_scenario(self, overrides):
+        try: self.macro = self.scenario.macro_assumptions
+        except: self.macro = None
+        try: self.project_info = self.scenario.project_info
+        except: self.project_info = None
+        try: self.opex = self.scenario.operating_expenses
+        except: self.opex = None
+        try: self.capex = self.scenario.capital_expenditure
+        except: self.capex = None
+        try: self.tax = self.scenario.tax_assumptions
+        except: self.tax = None
+        try: self.debt = self.scenario.debt_financing
+        except: self.debt = None
+        try: self.valuation = self.scenario.exit_valuation
+        except: self.valuation = None
+        try: self.revenue_products = list(self.scenario.revenue_products.all())
+        except: self.revenue_products = []
+        try: self.dep_schedules = list(self.scenario.depreciation_schedules.all())
+        except: self.dep_schedules = []
+
+        if not overrides: return
+        
+        if 'revenue_growth_adj' in overrides:
+            adj = Decimal(str(overrides['revenue_growth_adj']))
+            for p in self.revenue_products:
+                if p.volume_growth_rate is not None:
+                    p.volume_growth_rate += adj
+
+        if 'opex_margin_adj' in overrides and self.opex:
+            adj = Decimal(str(overrides['opex_margin_adj']))
+            if self.opex.total_headcount:
+                self.opex.total_headcount = int(self.opex.total_headcount * (1 + float(adj)))
+            if self.opex.administrative_expenses_annual:
+                self.opex.administrative_expenses_annual *= (1 + adj)
+            if self.opex.rent_facilities_annual:
+                self.opex.rent_facilities_annual *= (1 + adj)
+            if self.opex.technology_software_annual:
+                self.opex.technology_software_annual *= (1 + adj)
+            if self.opex.professional_fees_annual:
+                self.opex.professional_fees_annual *= (1 + adj)
+                
+        if 'capex_cost_adj' in overrides and self.capex:
+            adj = Decimal(str(overrides['capex_cost_adj']))
+            if self.capex.land_cost:
+                self.capex.land_cost *= (1 + adj)
+            if self.capex.construction_building_cost:
+                self.capex.construction_building_cost *= (1 + adj)
+            if self.capex.equipment_machinery_cost:
+                self.capex.equipment_machinery_cost *= (1 + adj)
+            if self.capex.ffe_cost:
+                self.capex.ffe_cost *= (1 + adj)
+                
+        if 'discount_rate_adj' in overrides and self.macro:
+            adj = Decimal(str(overrides['discount_rate_adj']))
+            if self.macro.discount_rate_wacc is not None:
+                self.macro.discount_rate_wacc += adj
 
     def _prepare_for_json(self, data):
         """Recursively convert Decimal to float for JSON serialization"""
@@ -145,8 +230,8 @@ class CalculationEngine:
         Returns: ['2025', '2026', '2027', ...]
         """
         try:
-            macro = self.scenario.macro_assumptions
-            project_info = self.scenario.project_info
+            macro = self.macro
+            project_info = self.project_info
             
             base_year = macro.base_year
             num_years = macro.number_of_years
@@ -166,7 +251,7 @@ class CalculationEngine:
         revenue_schedule = {}
         
         try:
-            products = self.scenario.revenue_products.all()
+            products = self.revenue_products
             
             for product in products:
                 product_revenue = {}
@@ -215,8 +300,8 @@ class CalculationEngine:
         opex_schedule = {}
         
         try:
-            opex = self.scenario.operating_expenses
-            macro = self.scenario.macro_assumptions
+            opex = self.opex
+            macro = self.macro
             
             # Staff Costs
             staff_costs = {}
@@ -280,8 +365,8 @@ class CalculationEngine:
         depreciation_schedule = {}
         
         try:
-            schedules = self.scenario.depreciation_schedules.all()
-            project_info = self.scenario.project_info
+            schedules = self.dep_schedules
+            project_info = self.project_info
             
             # Determine when operations start (depreciation begins)
             ops_start_year = project_info.operations_start_date.year
@@ -332,8 +417,8 @@ class CalculationEngine:
         capex_schedule = {}
         
         try:
-            capex = self.scenario.capital_expenditure
-            project_info = self.scenario.project_info
+            capex = self.capex
+            project_info = self.project_info
             
             # Calculate total initial CAPEX
             total_hard_costs = (
@@ -399,9 +484,9 @@ class CalculationEngine:
         }
         
         try:
-            debt = self.scenario.debt_financing
-            capex = self.scenario.capital_expenditure
-            project_info = self.scenario.project_info
+            debt = self.debt
+            capex = self.capex
+            project_info = self.project_info
             
             # Calculate total debt amount
             # Get total project cost from CAPEX
@@ -501,7 +586,7 @@ class CalculationEngine:
         is_data = {}
         
         try:
-            tax = self.scenario.tax_assumptions
+            tax = self.tax
             
             # Total Revenue
             total_revenue = {}
@@ -637,8 +722,8 @@ class CalculationEngine:
             for period in self.periods:
                 cff[period] = (
                     debt_schedule['Drawdowns'][period] +
-                    debt_repayment[period] +
-                    interest_cf[period]
+                    debt_repayment[period]
+                    # Interest is already deducted in Net Income (Operating CF). Do not deduct again here.
                 )
             
             cfs_data['Cash Flow from Financing'] = cff
@@ -840,8 +925,8 @@ class CalculationEngine:
         valuation = {}
         
         try:
-            valuation_params = self.scenario.exit_valuation
-            macro = self.scenario.macro_assumptions
+            valuation_params = self.valuation
+            macro = self.macro
             
             # Get Free Cash Flow
             fcf_series = []
@@ -877,10 +962,29 @@ class CalculationEngine:
         return npv
     
     def _calculate_irr(self, cash_flows: List[float]) -> float:
-        """Calculate Internal Rate of Return"""
+        """
+        Calculate Internal Rate of Return using Newton-Raphson iteration.
+        np.irr was removed in NumPy 2.0, so we implement it manually.
+        """
         try:
-            return float(np.irr(cash_flows))
-        except:
+            if not cash_flows or len(cash_flows) < 2:
+                return 0.0
+
+            # Newton-Raphson iteration to find IRR
+            rate = 0.1  # Initial guess: 10%
+            for _ in range(1000):
+                npv = sum(cf / (1 + rate) ** i for i, cf in enumerate(cash_flows))
+                # Derivative of NPV with respect to rate
+                dnpv = sum(-i * cf / (1 + rate) ** (i + 1) for i, cf in enumerate(cash_flows))
+                if dnpv == 0:
+                    break
+                new_rate = rate - npv / dnpv
+                if abs(new_rate - rate) < 1e-7:
+                    return float(new_rate)
+                rate = new_rate
+
+            return float(rate)
+        except Exception:
             return 0.0
     
     def _save_results(
@@ -888,60 +992,62 @@ class CalculationEngine:
         ratios, valuation, debt_schedule
     ):
         """
-        Save all calculated results to database
+        Save all calculated results to database.
+        All Decimal values are converted to float before saving to avoid
+        JSON serialization errors in JSONFields.
         """
         # Clear existing results for this scenario
         CalculatedStatement.objects.filter(scenario=self.scenario).delete()
-        
+
         # Save Income Statement
         for line_item, values in income_statement.items():
             CalculatedStatement.objects.create(
                 scenario=self.scenario,
                 statement_type='is',
                 line_item=line_item,
-                values_by_period=values
+                values_by_period=self._prepare_for_json(values)
             )
-        
+
         # Save Balance Sheet
         for line_item, values in balance_sheet.items():
             CalculatedStatement.objects.create(
                 scenario=self.scenario,
                 statement_type='bs',
                 line_item=line_item,
-                values_by_period=values
+                values_by_period=self._prepare_for_json(values)
             )
-        
+
         # Save Cash Flow Statement
         for line_item, values in cash_flow_statement.items():
             CalculatedStatement.objects.create(
                 scenario=self.scenario,
                 statement_type='cfs',
                 line_item=line_item,
-                values_by_period=values
+                values_by_period=self._prepare_for_json(values)
             )
-        
+
         # Save Ratios
         for line_item, values in ratios.items():
             CalculatedStatement.objects.create(
                 scenario=self.scenario,
                 statement_type='ratio',
                 line_item=line_item,
-                values_by_period=values
+                values_by_period=self._prepare_for_json(values)
             )
-        
+
         # Save Valuation Metrics
         CalculatedStatement.objects.create(
             scenario=self.scenario,
             statement_type='valuation',
             line_item='Valuation Metrics',
-            values_by_period=valuation
+            values_by_period=self._prepare_for_json(valuation)
         )
-        
+
         # Save Debt Schedule
         for line_item, values in debt_schedule.items():
             CalculatedStatement.objects.create(
                 scenario=self.scenario,
                 statement_type='debt',
                 line_item=line_item,
-                values_by_period=values
+                values_by_period=self._prepare_for_json(values)
             )

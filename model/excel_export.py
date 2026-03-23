@@ -83,7 +83,7 @@ class ExcelExporter:
         ws['A5'] = 'Last Updated:'
         ws['B5'] = model.updated_at.strftime('%Y-%m-%d')
         ws['A6'] = 'Owner:'
-        ws['B6'] = model.owner.username
+        ws['B6'] = model.owner.email
         
         # Scenarios
         ws['A8'] = 'Scenarios:'

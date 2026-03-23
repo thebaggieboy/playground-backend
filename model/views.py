@@ -247,6 +247,36 @@ class ScenarioViewSet(viewsets.ModelViewSet):
                 'status': 'success',
                 'result': result
             }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def sensitivity(self, request, pk=None):
+        """
+        Run a fast, memory-only calculation with overrides for Sensitivity Analysis.
+        POST /api/scenarios/{id}/sensitivity/
+        Body: {
+            "revenue_growth_adj": 0.05,
+            "opex_margin_adj": -0.02,
+            ...
+        }
+        """
+        scenario = self.get_object()
+        overrides = request.data
+        
+        try:
+            from .calculation_engine import CalculationEngine
+            engine = CalculationEngine()
+            result = engine.calculate_scenario(
+                scenario, 
+                user=request.user, 
+                save_results=False, 
+                overrides=overrides
+            )
+            
+            return Response(result, status=status.HTTP_200_OK)
             
         except Exception as e:
             return Response({
