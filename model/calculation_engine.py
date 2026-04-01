@@ -261,24 +261,26 @@ class CalculationEngine:
                 product_revenue = {}
                 
                 # Get product parameters
-                year_1_volume = product.year_1_sales_volume or Decimal('0')
-                year_1_price = product.unit_price_year_1 or Decimal('0')
-                volume_growth = product.volume_growth_rate or Decimal('0')
-                price_escalation = product.price_escalation_rate or Decimal('0')
+                year_1_volume = Decimal(str(product.year_1_sales_volume or '0'))
+                year_1_price = Decimal(str(product.unit_price_year_1 or '0'))
+                volume_growth = Decimal(str(product.volume_growth_rate or '0'))
+                price_escalation = Decimal(str(product.price_escalation_rate or '0'))
                 
                 for i, period in enumerate(self.periods):
                     # Volume growth (compounded)
-                    volume = year_1_volume * ((1 + volume_growth / 100) ** i)
+                    volume_factor = (Decimal('1') + volume_growth / Decimal('100')) ** Decimal(str(i))
+                    volume = year_1_volume * volume_factor
                     
                     # Price escalation (compounded)
-                    price = year_1_price * ((1 + price_escalation / 100) ** i)
+                    price_factor = (Decimal('1') + price_escalation / Decimal('100')) ** Decimal(str(i))
+                    price = year_1_price * price_factor
                     
                     # Revenue = Volume × Price
                     revenue = volume * price
                     
                     # Apply ramp-up factor if in ramp-up period
                     if product.revenue_rampup_months and i == 0:
-                        rampup_factor = min(Decimal('1.0'), product.revenue_rampup_months / Decimal('12'))
+                        rampup_factor = min(Decimal('1.0'), Decimal(str(product.revenue_rampup_months)) / Decimal('12'))
                         revenue = revenue * rampup_factor
                     
                     # Apply seasonal adjustment
@@ -541,7 +543,7 @@ class CalculationEngine:
                 # Principal repayment (after grace period)
                 if year >= repayment_start_year and debt.repayment_type == 'Amortizing':
                     # Calculate amortizing payment
-                    periods_remaining = debt.loan_tenor_years - (year - repayment_start_year)
+                    periods_remaining = int(debt.loan_tenor_years) - (year - int(repayment_start_year))
                     if periods_remaining > 0:
                         # PMT formula
                         principal_payment = self._calculate_pmt(
@@ -587,7 +589,7 @@ class CalculationEngine:
         """
         Build complete income statement
         """
-        is_data = {}
+        is_data: Dict[str, Dict[str, Decimal]] = {}
         
         try:
             tax = self.tax
@@ -650,7 +652,7 @@ class CalculationEngine:
             is_data['EBT'] = ebt
             
             # Tax Expense
-            tax_expense = {}
+            tax_expense: Dict[str, Decimal] = {}
             for period in self.periods:
                 if ebt[period] > 0:
                     tax_expense[period] = (ebt[period] * tax.corporate_income_tax_rate / 100).quantize(Decimal('0.01'))
@@ -660,7 +662,7 @@ class CalculationEngine:
             is_data['Tax Expense'] = tax_expense
             
             # Net Income
-            net_income = {}
+            net_income: Dict[str, Decimal] = {}
             for period in self.periods:
                 net_income[period] = ebt[period] - tax_expense[period]
             
@@ -677,7 +679,7 @@ class CalculationEngine:
         """
         Build cash flow statement
         """
-        cfs_data = {}
+        cfs_data: Dict[str, Dict[str, Decimal]] = {}
         
         try:
             # Operating Cash Flow
@@ -693,9 +695,9 @@ class CalculationEngine:
             wc_liabilities = {p: Decimal('0') for p in self.periods}
             
             if getattr(self, 'working_capital', None):
-                rec_days = Decimal(str(self.working_capital.receivables_days))
-                pay_days = Decimal(str(self.working_capital.payables_days))
-                inv_days = Decimal(str(self.working_capital.inventory_days))
+                rec_days = Decimal(str(self.working_capital.receivables_days_dso))
+                pay_days = Decimal(str(self.working_capital.payables_days_dpo))
+                inv_days = Decimal(str(self.working_capital.inventory_days_dio))
                 
                 prev_nwc = Decimal('0')
                 for period in self.periods:

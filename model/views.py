@@ -6,12 +6,23 @@ Implements calculation engine, Excel export, template management
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from django.http import FileResponse, HttpResponse
 from django.db import transaction, models
 from django.utils import timezone
 from datetime import datetime
 import io
 import json
+
+
+# ============================================================================
+# PAGINATION
+# ============================================================================
+
+class StandardResultsPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 from .models import (
     FinancialModel, Scenario, CalculatedStatement, ModelTemplate, CalculationLog
@@ -34,6 +45,7 @@ class FinancialModelViewSet(viewsets.ModelViewSet):
     Handles CRUD for Financial Models
     """
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = StandardResultsPagination  # #12
     
     def get_queryset(self):
         return FinancialModel.objects.filter(owner=self.request.user).prefetch_related('scenarios')
@@ -65,25 +77,32 @@ class FinancialModelViewSet(viewsets.ModelViewSet):
             model.is_calculation_in_progress = True
             model.save()
             
-            # Run calculation for all active scenarios
+            # Run calculation for all active scenarios — capture per-scenario failures (#11)
             from .calculation_engine import CalculationEngine
             engine = CalculationEngine()
             
             results = {}
+            failed_steps = []
+
             for scenario in model.scenarios.filter(is_active=True):
-                result = engine.calculate_scenario(scenario, user=request.user)
-                results[scenario.name] = result
+                try:
+                    result = engine.calculate_scenario(scenario, user=request.user)
+                    results[scenario.name] = result
+                except Exception as scenario_err:
+                    failed_steps.append(scenario.name)
+                    results[scenario.name] = {'error': str(scenario_err)}
             
             # Update model status
             model.is_calculation_in_progress = False
             model.last_calculated_at = timezone.now()
-            model.calculation_error = None
+            model.calculation_error = ', '.join(failed_steps) if failed_steps else None
             model.save()
             
             return Response({
-                'status': 'success',
-                'message': 'Model calculated successfully',
-                'results': results
+                'status': 'success' if not failed_steps else 'partial',
+                'message': 'Model calculated successfully' if not failed_steps else f'{len(failed_steps)} scenario(s) had errors',
+                'results': results,
+                'failed_steps': failed_steps,  # #11 — surfaced to frontend
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
@@ -177,6 +196,7 @@ class ScenarioViewSet(viewsets.ModelViewSet):
     Handles CRUD for Scenarios with complete input data
     """
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = StandardResultsPagination  # #12
     
     def get_queryset(self):
         return Scenario.objects.filter(model__owner=self.request.user)
