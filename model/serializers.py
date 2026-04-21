@@ -363,9 +363,12 @@ class ScenarioCreateUpdateSerializer(serializers.ModelSerializer):
 
 class ScenarioListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for scenario list"""
+    model_name = serializers.CharField(source='model.name', read_only=True)
+    model_id = serializers.IntegerField(source='model.id', read_only=True)
+    
     class Meta:
         model = Scenario
-        fields = ['id', 'name', 'scenario_type', 'is_active', 'created_at']
+        fields = ['id', 'name', 'scenario_type', 'is_active', 'created_at', 'model_name', 'model_id']
 
 
 class FinancialModelListSerializer(serializers.ModelSerializer):

@@ -224,6 +224,141 @@ class FinancialModelViewSet(viewsets.ModelViewSet):
             return Response({
                 'error': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['post'])
+    def parse_upload(self, request):
+        """
+        Parse an uploaded financial model file (Excel, CSV, PDF).
+        POST /api/models/parse_upload/
+        Body: multipart/form-data with 'file' field
+        Returns structured sheet data for frontend viewer.
+        """
+        uploaded_file = request.FILES.get('file')
+        if not uploaded_file:
+            return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        filename = uploaded_file.name
+        file_size = uploaded_file.size
+        ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+        
+        MAX_PREVIEW_ROWS = 200  # Limit rows for performance
+        
+        try:
+            sheets = []
+            total_cells = 0
+            detected_type = 'Unknown'
+            
+            if ext in ('xlsx', 'xlsm', 'xls'):
+                import openpyxl
+                wb = openpyxl.load_workbook(uploaded_file, read_only=True, data_only=True)
+                detected_type = 'Excel Workbook'
+                
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    rows_data = []
+                    headers = []
+                    max_col = 0
+                    row_count = 0
+                    
+                    for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
+                        row_count += 1
+                        # Convert row to serializable list
+                        clean_row = []
+                        for cell in row:
+                            if cell is None:
+                                clean_row.append(None)
+                            elif isinstance(cell, (int, float)):
+                                clean_row.append(round(float(cell), 4) if isinstance(cell, float) else cell)
+                            else:
+                                clean_row.append(str(cell)[:200])  # Truncate long strings
+                        
+                        max_col = max(max_col, len(clean_row))
+                        total_cells += len([c for c in clean_row if c is not None])
+                        
+                        if row_idx == 0:
+                            headers = [str(c) if c else f'Col {i+1}' for i, c in enumerate(clean_row)]
+                        elif row_idx <= MAX_PREVIEW_ROWS:
+                            rows_data.append(clean_row)
+                    
+                    sheets.append({
+                        'name': sheet_name,
+                        'headers': headers[:50],  # Limit columns
+                        'rows': [r[:50] for r in rows_data],
+                        'totalRows': row_count,
+                        'totalCols': min(max_col, 50),
+                    })
+                
+                wb.close()
+            
+            elif ext == 'csv':
+                import csv
+                detected_type = 'CSV File'
+                content = uploaded_file.read().decode('utf-8-sig', errors='replace')
+                reader = csv.reader(content.splitlines())
+                
+                headers = []
+                rows_data = []
+                row_count = 0
+                max_col = 0
+                
+                for row_idx, row in enumerate(reader):
+                    row_count += 1
+                    clean_row = []
+                    for cell in row:
+                        try:
+                            val = float(cell.replace(',', ''))
+                            clean_row.append(round(val, 4))
+                        except (ValueError, AttributeError):
+                            clean_row.append(cell[:200] if cell else None)
+                    
+                    max_col = max(max_col, len(clean_row))
+                    total_cells += len([c for c in clean_row if c is not None])
+                    
+                    if row_idx == 0:
+                        headers = [str(c) if c else f'Col {i+1}' for i, c in enumerate(clean_row)]
+                    elif row_idx <= MAX_PREVIEW_ROWS:
+                        rows_data.append(clean_row)
+                
+                sheets.append({
+                    'name': 'Sheet1',
+                    'headers': headers[:50],
+                    'rows': [r[:50] for r in rows_data],
+                    'totalRows': row_count,
+                    'totalCols': min(max_col, 50),
+                })
+            
+            elif ext == 'pdf':
+                detected_type = 'PDF Document'
+                # Basic PDF text extraction
+                sheets.append({
+                    'name': 'Document',
+                    'headers': ['Content'],
+                    'rows': [['PDF preview is not available. Please export as Excel for full data viewing.']],
+                    'totalRows': 1,
+                    'totalCols': 1,
+                })
+                total_cells = 1
+            
+            else:
+                return Response({
+                    'error': f'Unsupported file type: .{ext}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            return Response({
+                'filename': filename,
+                'fileSize': file_size,
+                'sheets': sheets,
+                'summary': {
+                    'totalSheets': len(sheets),
+                    'totalCells': total_cells,
+                    'detectedType': detected_type,
+                }
+            })
+        
+        except Exception as e:
+            return Response({
+                'error': f'Failed to parse file: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ============================================================================
@@ -244,6 +379,9 @@ class ScenarioViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'update', 'partial_update']:
             return ScenarioCreateUpdateSerializer
         elif self.action == 'list':
+            # Allow analytics page to request full detail via ?detail=true
+            if self.request.query_params.get('detail') == 'true':
+                return ScenarioDetailSerializer
             return ScenarioListSerializer
         return ScenarioDetailSerializer
     
