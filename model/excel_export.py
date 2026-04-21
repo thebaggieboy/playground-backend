@@ -185,7 +185,8 @@ class ExcelExporter:
         ws[f'A{row}'] = 'Line Item'
         periods = []
         col = 2
-        for period in sorted(statements.first().values_by_period.keys()):
+        first_stmt = statements.first() if hasattr(statements, 'first') else statements[0]
+        for period in sorted(first_stmt.values_by_period.keys()):
             ws.cell(row, col).value = period
             ws.cell(row, col).font = Font(bold=True)
             periods.append(period)
@@ -218,7 +219,8 @@ class ExcelExporter:
         
         # Similar structure to IS
         self._populate_statement_sheet(ws, 'BALANCE SHEET', statements)
-        self._format_statement_sheet(ws, len(statements.first().values_by_period.keys()))
+        first_stmt = statements.first() if hasattr(statements, 'first') else statements[0]
+        self._format_statement_sheet(ws, len(first_stmt.values_by_period.keys()))
     
     def _create_cashflow_statement(self, scenario, prefix):
         """Create Cash Flow Statement"""
@@ -231,7 +233,8 @@ class ExcelExporter:
             return
         
         self._populate_statement_sheet(ws, 'CASH FLOW STATEMENT', statements)
-        self._format_statement_sheet(ws, len(statements.first().values_by_period.keys()))
+        first_stmt = statements.first() if hasattr(statements, 'first') else statements[0]
+        self._format_statement_sheet(ws, len(first_stmt.values_by_period.keys()))
     
     def _create_revenue_schedule(self, scenario, prefix):
         """Create detailed revenue schedule"""
@@ -367,7 +370,8 @@ class ExcelExporter:
             return
         
         self._populate_statement_sheet(ws, 'DEBT SCHEDULE', statements)
-        self._format_statement_sheet(ws, len(statements.first().values_by_period.keys()))
+        first_stmt = statements.first() if hasattr(statements, 'first') else statements[0]
+        self._format_statement_sheet(ws, len(first_stmt.values_by_period.keys()))
     
     def _create_ratios_sheet(self, scenario, prefix):
         """Create financial ratios sheet"""
@@ -377,7 +381,8 @@ class ExcelExporter:
         
         if statements.exists():
             self._populate_statement_sheet(ws, 'FINANCIAL RATIOS', statements)
-            self._format_statement_sheet(ws, len(statements.first().values_by_period.keys()))
+            first_stmt = statements.first() if hasattr(statements, 'first') else statements[0]
+            self._format_statement_sheet(ws, len(first_stmt.values_by_period.keys()))
     
     def _create_valuation_sheet(self, scenario, prefix):
         """Create valuation sheet"""
@@ -445,7 +450,8 @@ class ExcelExporter:
         
         # Headers
         ws[f'A{row}'] = 'Line Item'
-        periods = sorted(statements.first().values_by_period.keys())
+        first_stmt = statements.first() if hasattr(statements, 'first') else statements[0]
+        periods = sorted(first_stmt.values_by_period.keys())
         col = 2
         for period in periods:
             ws.cell(row, col).value = period
