@@ -224,7 +224,9 @@ class CalculationEngine:
             return {k: self._prepare_for_json(v) for k, v in data.items()}
         elif isinstance(data, list):
             return [self._prepare_for_json(item) for item in data]
-        elif isinstance(data, Decimal):
+        elif isinstance(data, tuple):
+            return tuple(self._prepare_for_json(item) for item in data)
+        elif isinstance(data, Decimal) or type(data).__name__ == 'Decimal':
             return float(data)
         return data
     
@@ -267,19 +269,30 @@ class CalculationEngine:
                 price_escalation = Decimal(str(product.price_escalation_rate or '0'))
                 
                 for i, period in enumerate(self.periods):
-                    # Volume growth (compounded)
-                    volume_factor = (Decimal('1') + volume_growth / Decimal('100')) ** Decimal(str(i))
-                    volume = year_1_volume * volume_factor
-                    
-                    # Price escalation (compounded)
-                    price_factor = (Decimal('1') + price_escalation / Decimal('100')) ** Decimal(str(i))
-                    price = year_1_price * price_factor
-                    
-                    # Revenue = Volume × Price
-                    revenue = volume * price
+                    # Real Estate specialized revenue logic
+                    if product.number_of_units and product.sale_price_per_unit:
+                        # Revenue = Units × Price (one-time sale model for now)
+                        price_factor = (Decimal('1') + price_escalation / Decimal('100')) ** Decimal(str(i))
+                        price = Decimal(str(product.sale_price_per_unit)) * price_factor
+                        # Sales absorption - distributes sales over time
+                        absorption_months = product.sales_absorption_period_months or 24
+                        annual_absorption_factor = min(Decimal('1.0'), Decimal('12') / Decimal(str(absorption_months)))
+                        revenue = Decimal(str(product.number_of_units)) * price * annual_absorption_factor
+                    else:
+                        # Standard Volume × Price model
+                        # Volume growth (compounded)
+                        volume_factor = (Decimal('1') + volume_growth / Decimal('100')) ** Decimal(str(i))
+                        volume = year_1_volume * volume_factor
+                        
+                        # Price escalation (compounded)
+                        price_factor = (Decimal('1') + price_escalation / Decimal('100')) ** Decimal(str(i))
+                        price = year_1_price * price_factor
+                        
+                        # Revenue = Volume × Price
+                        revenue = volume * price
                     
                     # Apply ramp-up factor if in ramp-up period
-                    if product.revenue_rampup_months and i == 0:
+                    if product.revenue_rampup_months and i == 0 and not (product.number_of_units and product.sale_price_per_unit):
                         rampup_factor = min(Decimal('1.0'), Decimal(str(product.revenue_rampup_months)) / Decimal('12'))
                         revenue = revenue * rampup_factor
                     
@@ -357,6 +370,30 @@ class CalculationEngine:
                 insurance[period] = escalated.quantize(Decimal('0.01'))
             
             opex_schedule['Insurance'] = insurance
+
+            # Property Management (Real Estate)
+            if opex.property_management_pct:
+                prop_mgmt = {}
+                # Calculate total revenue for each period
+                for period in self.periods:
+                    total_rev = Decimal('0')
+                    for prod_rev in revenue_schedule.values():
+                        total_rev += prod_rev.get(period, Decimal('0'))
+                    
+                    mgmt_fee = total_rev * (opex.property_management_pct / 100)
+                    prop_mgmt[period] = mgmt_fee.quantize(Decimal('0.01'))
+                
+                opex_schedule['Property Management'] = prop_mgmt
+            
+            # TAM Costs (Turn Around Maintenance)
+            if opex.tam_cost and opex.tam_frequency_years:
+                tam_schedule = {}
+                for i, period in enumerate(self.periods):
+                    if i > 0 and i % opex.tam_frequency_years == 0:
+                        tam_schedule[period] = opex.tam_cost.quantize(Decimal('0.01'))
+                    else:
+                        tam_schedule[period] = Decimal('0')
+                opex_schedule['TAM Expenses'] = tam_schedule
             
         except Exception as e:
             logger.error(f"Error calculating opex: {str(e)}")
@@ -439,6 +476,10 @@ class CalculationEngine:
                 total_hard_costs += capex.carpark_cost
             if capex.amenities_cost:
                 total_hard_costs += capex.amenities_cost
+            if capex.apartment_construction_cost:
+                total_hard_costs += capex.apartment_construction_cost
+            if capex.hotel_commercial_cost:
+                total_hard_costs += capex.hotel_commercial_cost
             
             # Add soft costs
             contingency = total_hard_costs * capex.contingency_pct / 100
@@ -1017,21 +1058,31 @@ class CalculationEngine:
         self, income_statement, cash_flow_statement
     ) -> Dict[str, Decimal]:
         """
-        Calculate valuation metrics (NPV, IRR, etc.)
+        Calculate valuation metrics (NPV, IRR, etc.) using Unlevered Free Cash Flow (FCFF)
         """
         valuation = {}
         
         try:
             valuation_params = self.valuation
-            macro = self.macro
+            tax_rate = float(self.tax.corporate_income_tax_rate / 100) if self.tax else 0.0
             
-            # Get Free Cash Flow (CFO + CFI) to correctly include CAPEX outlays in return metrics
+            # Generate accurate Unlevered Free Cash Flow (FCFF)
+            # FCFF = EBIT*(1-T) + D&A - CAPEX - Changes in WC
             fcf_series = []
             for period in self.periods:
-                cfo = cash_flow_statement['Cash Flow from Operations'][period]
-                cfi = cash_flow_statement['Cash Flow from Investing'][period]
-                fcf = cfo + cfi
-                fcf_series.append(float(fcf))
+                ebit = float(income_statement.get('EBIT', {}).get(period, 0))
+                nopat = ebit * (1 - tax_rate)
+                
+                depreciation = float(income_statement.get('Depreciation', {}).get(period, 0))
+                
+                # CFI is CAPEX (negative cash stream)
+                cfi = float(cash_flow_statement.get('Cash Flow from Investing', {}).get(period, 0))
+                
+                # Working capital change
+                dwc = float(cash_flow_statement.get('Changes in Working Capital', {}).get(period, 0))
+                
+                fcf = nopat + depreciation + cfi - dwc
+                fcf_series.append(fcf)
             
             # NPV Calculation
             discount_rate = float(valuation_params.discount_rate_npv_pct / 100)

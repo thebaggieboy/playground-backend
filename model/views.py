@@ -360,6 +360,136 @@ class FinancialModelViewSet(viewsets.ModelViewSet):
                 'error': f'Failed to parse file: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=False, methods=['post'])
+    def import_as_calculated_model(self, request):
+        """
+        Creates a FinancialModel and populates CalculatedStatements from uploaded JSON data.
+        POST /api/models/import_as_calculated_model/
+        """
+        data = request.data
+        filename = data.get('filename', 'Imported Model')
+        sheets = data.get('sheets', [])
+        
+        if not sheets:
+            return Response({'error': 'No sheet data provided'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            with transaction.atomic():
+                # Create the model
+                model = FinancialModel.objects.create(
+                    name=f"Imported: {filename}",
+                    owner=request.user,
+                    status='active'
+                )
+                
+                # Create the base scenario
+                scenario = Scenario.objects.create(
+                    model=model,
+                    name='Imported Data',
+                    scenario_type='base'
+                )
+                
+                extracted_count = 0
+                
+                # Keywords to search for
+                KEYWORD_MAP = {
+                    'Revenue': ['revenue', 'sales', 'turnover', 'total income'],
+                    'COGS': ['cogs', 'cost of sales', 'direct costs', 'variable cost'],
+                    'Gross Profit': ['gross profit', 'gp'],
+                    'OpEx': ['operating expenses', 'opex', 'indirect costs', 'admin expenses', 'total expense'],
+                    'EBITDA': ['ebitda'],
+                    'Net Income': ['net income', 'pat', 'profit after tax', 'net profit'],
+                    'NPV': ['npv', 'net present value'],
+                    'IRR': ['irr', 'internal rate of return']
+                }
+                
+                # Statement type mapping
+                STMT_TYPE_MAP = {
+                    'Revenue': 'is', 'COGS': 'is', 'Gross Profit': 'is', 'OpEx': 'is', 'EBITDA': 'is', 'Net Income': 'is',
+                    'NPV': 'valuation', 'IRR': 'valuation'
+                }
+                
+                for sheet in sheets:
+                    headers = sheet.get('headers', [])
+                    rows = sheet.get('rows', [])
+                    
+                    # 1. Identify year columns accurately
+                    year_cols = []
+                    for i, h in enumerate(headers):
+                        h_str = str(h).strip().lower()
+                        # Matches: "2024", "2025", "Year 1", "Y1", "FY2025"
+                        if (h_str.isdigit() and len(h_str) == 4) or \
+                           ('year' in h_str) or \
+                           (h_str.startswith('y') and h_str[1:].isdigit()) or \
+                           (h_str.startswith('fy') and h_str[2:].isdigit()):
+                            
+                            # Clean label for period (e.g. "Year 1" or "2025")
+                            label = h_str.replace('fy', '').strip().title()
+                            year_cols.append((i, label))
+                    
+                    if not year_cols:
+                        continue 
+
+                    # 2. Search for keyword matches in rows
+                    for row in rows:
+                        if not row or not any(row): continue
+                        
+                        # Check labels in first 2 columns (often labels are in A or B)
+                        label_found = False
+                        matched_label_key = None
+                        
+                        for label_idx in [0, 1]:
+                            if label_idx >= len(row): continue
+                            cell_val = str(row[label_idx]).strip().lower() if row[label_idx] else ""
+                            if not cell_val: continue
+                            
+                            for clean_label, keywords in KEYWORD_MAP.items():
+                                if any(k == cell_val or f" {k} " in f" {cell_val} " for k in keywords):
+                                    label_found = True
+                                    matched_label_key = clean_label
+                                    break
+                            if label_found: break
+                        
+                        if label_found and matched_label_key:
+                            # Extract values from identified year columns
+                            values_by_period = {}
+                            for col_idx, period in year_cols:
+                                if col_idx < len(row):
+                                    val = row[col_idx]
+                                    try:
+                                        if val is not None:
+                                            # Clean numeric value (handle strings like "$1,000")
+                                            if isinstance(val, str):
+                                                val = val.replace('$', '').replace(',', '').strip()
+                                            values_by_period[period] = float(val)
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            if values_by_period:
+                                CalculatedStatement.objects.update_or_create(
+                                    scenario=scenario,
+                                    statement_type=STMT_TYPE_MAP[matched_label_key],
+                                    line_item=matched_label_key,
+                                    defaults={'values_by_period': values_by_period}
+                                )
+                                extracted_count += 1
+                
+                # Update calculation status
+                model.last_calculated_at = timezone.now()
+                model.save()
+                
+                return Response({
+                    'status': 'success',
+                    'message': f'Successfully extracted {extracted_count} metrics from the sheet.',
+                    'model_id': model.id,
+                    'scenario_id': scenario.id,
+                    'extracted_items': extracted_count
+                }, status=status.HTTP_201_CREATED)
+                
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
 
 # ============================================================================
 # SCENARIO VIEWSET
