@@ -237,24 +237,125 @@ class ExcelExporter:
         """Create detailed revenue schedule"""
         ws = self.wb.create_sheet(f'{prefix}_Revenue')
         
-        # Add revenue products
         ws['A1'] = 'REVENUE SCHEDULE'
         ws['A1'].font = Font(size=14, bold=True)
         
-        # Add product details
-        # (Implementation similar to statements)
+        # Pull revenue line items from IS statements
+        from .models import CalculatedStatement
+        stmts = CalculatedStatement.objects.filter(
+            scenario=scenario, statement_type='is',
+            line_item__in=['Total Revenue']
+        )
+        # Also add individual product revenue if available
+        all_revenue_stmts = list(stmts)
+        
+        # Add revenue product details
+        row = 3
+        ws[f'A{row}'] = 'REVENUE PRODUCTS'
+        ws[f'A{row}'].font = Font(bold=True)
+        row += 1
+        
+        for product in scenario.revenue_products.all():
+            ws[f'A{row}'] = product.product_name
+            ws[f'B{row}'] = f'Volume: {product.year_1_sales_volume:,.0f} {product.unit_of_measure}'
+            ws[f'C{row}'] = f'Price: ${product.unit_price_year_1:,.2f}'
+            ws[f'D{row}'] = f'Growth: {product.volume_growth_rate}%'
+            ws[f'E{row}'] = f'Escalation: {product.price_escalation_rate}%'
+            ws[f'B{row}'].font = Font(color=self.BLUE)
+            ws[f'C{row}'].font = Font(color=self.BLUE)
+            row += 1
+        
+        row += 1
+        
+        # Add total revenue time series if calculated
+        if all_revenue_stmts:
+            self._populate_statement_sheet(ws, 'CALCULATED REVENUE', all_revenue_stmts)
+        
+        # Format
+        ws.column_dimensions['A'].width = 25
+        for col in ['B', 'C', 'D', 'E']:
+            ws.column_dimensions[col].width = 20
     
     def _create_opex_schedule(self, scenario, prefix):
         """Create OpEx schedule"""
         ws = self.wb.create_sheet(f'{prefix}_OpEx')
         ws['A1'] = 'OPERATING EXPENSES'
         ws['A1'].font = Font(size=14, bold=True)
+        
+        # Add OpEx assumptions
+        row = 3
+        try:
+            opex = scenario.operating_expenses
+            assumptions = [
+                ('Total Headcount', opex.total_headcount, ''),
+                ('Average Annual Salary', opex.average_annual_salary, '$'),
+                ('Benefits/Payroll Tax', opex.benefits_payroll_tax_pct, '%'),
+                ('Salary Escalation Rate', opex.salary_escalation_rate, '%'),
+                ('Power/Electricity (Annual)', opex.power_electricity_cost_annual, '$'),
+                ('Insurance (Annual)', opex.insurance_annual, '$'),
+                ('Marketing/Sales (% Rev)', opex.marketing_sales_pct_revenue, '%'),
+                ('Regular Maintenance (% Rev)', opex.regular_maintenance_pct_revenue, '%'),
+            ]
+            ws[f'A{row}'] = 'OPEX ASSUMPTIONS'
+            ws[f'A{row}'].font = Font(bold=True)
+            row += 1
+            for label, value, unit in assumptions:
+                self._add_assumption(ws, row, label, value, unit)
+                row += 1
+        except Exception:
+            pass
+        
+        row += 1
+        
+        # Add calculated OpEx statements (Staff Costs, Utilities, etc.)
+        from .models import CalculatedStatement
+        opex_stmts = CalculatedStatement.objects.filter(
+            scenario=scenario, statement_type='is',
+            line_item__in=['Total Operating Expenses']
+        )
+        if opex_stmts.exists():
+            self._populate_statement_sheet(ws, 'CALCULATED OPEX', opex_stmts)
+        
+        ws.column_dimensions['A'].width = 30
+        ws.column_dimensions['B'].width = 15
     
     def _create_depreciation_schedule(self, scenario, prefix):
         """Create depreciation schedule"""
         ws = self.wb.create_sheet(f'{prefix}_Depreciation')
         ws['A1'] = 'DEPRECIATION SCHEDULE'
         ws['A1'].font = Font(size=14, bold=True)
+        
+        # Add depreciation assumptions
+        row = 3
+        ws[f'A{row}'] = 'ASSET CATEGORIES'
+        ws[f'A{row}'].font = Font(bold=True)
+        row += 1
+        
+        ws[f'A{row}'] = 'Category'
+        ws[f'B{row}'] = 'Asset Value'
+        ws[f'C{row}'] = 'Useful Life (yrs)'
+        ws[f'D{row}'] = 'Residual Value %'
+        ws[f'E{row}'] = 'Method'
+        for col_letter in ['A', 'B', 'C', 'D', 'E']:
+            ws[f'{col_letter}{row}'].font = Font(bold=True)
+        row += 1
+        
+        for schedule in scenario.depreciation_schedules.all():
+            ws[f'A{row}'] = schedule.get_asset_category_display()
+            ws[f'B{row}'] = float(schedule.asset_value)
+            ws[f'B{row}'].number_format = '#,##0.00'
+            ws[f'B{row}'].font = Font(color=self.BLUE)
+            ws[f'C{row}'] = schedule.useful_life_years
+            ws[f'D{row}'] = float(schedule.residual_value_pct)
+            ws[f'E{row}'] = schedule.get_depreciation_method_display()
+            row += 1
+        
+        # Format
+        ws.column_dimensions['A'].width = 25
+        ws.column_dimensions['B'].width = 18
+        ws.column_dimensions['C'].width = 18
+        ws.column_dimensions['D'].width = 18
+        ws.column_dimensions['E'].width = 18
     
     def _create_debt_schedule(self, scenario, prefix):
         """Create debt schedule"""
@@ -284,8 +385,56 @@ class ExcelExporter:
         ws['A1'] = 'VALUATION'
         ws['A1'].font = Font(size=14, bold=True)
         
-        # Add valuation metrics
-        # (Implementation for NPV, IRR, etc.)
+        # Add valuation assumptions
+        row = 3
+        try:
+            ev = scenario.exit_valuation
+            ws[f'A{row}'] = 'VALUATION ASSUMPTIONS'
+            ws[f'A{row}'].font = Font(bold=True)
+            row += 1
+            assumptions = [
+                ('Exit Year', ev.exit_year, ''),
+                ('Exit Multiple (EV/EBITDA)', ev.exit_multiple_ev_ebitda, 'x'),
+                ('Terminal Growth Rate', ev.terminal_growth_rate_pct, '%'),
+                ('Discount Rate (NPV)', ev.discount_rate_npv_pct, '%'),
+                ('Target IRR', ev.target_irr_pct, '%'),
+                ('Valuation Method', ev.valuation_method, ''),
+            ]
+            for label, value, unit in assumptions:
+                self._add_assumption(ws, row, label, value, unit)
+                row += 1
+        except Exception:
+            pass
+        
+        row += 2
+        
+        # Add calculated valuation metrics
+        from .models import CalculatedStatement
+        val_stmts = CalculatedStatement.objects.filter(
+            scenario=scenario, statement_type='valuation'
+        )
+        if val_stmts.exists():
+            ws[f'A{row}'] = 'CALCULATED METRICS'
+            ws[f'A{row}'].font = Font(size=12, bold=True)
+            row += 1
+            
+            for stmt in val_stmts:
+                if stmt.values_by_period:
+                    for key, val in stmt.values_by_period.items():
+                        ws[f'A{row}'] = key
+                        if isinstance(val, (int, float)):
+                            ws[f'B{row}'] = float(val)
+                            if '%' in key:
+                                ws[f'B{row}'].number_format = '0.00"%"'
+                            else:
+                                ws[f'B{row}'].number_format = '#,##0.00'
+                        else:
+                            ws[f'B{row}'] = val
+                        ws[f'B{row}'].font = Font(bold=True, size=12)
+                        row += 1
+        
+        ws.column_dimensions['A'].width = 30
+        ws.column_dimensions['B'].width = 20
     
     def _populate_statement_sheet(self, ws, title, statements):
         """Helper to populate statement sheets"""

@@ -185,6 +185,45 @@ class FinancialModelViewSet(viewsets.ModelViewSet):
             return Response({
                 'error': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['get'])
+    def export_pdf(self, request, pk=None):
+        """
+        Export model to PDF (uses base case scenario)
+        GET /api/models/{id}/export_pdf/
+        """
+        model = self.get_object()
+        
+        try:
+            # Use the base case scenario, fallback to first active
+            scenario = (
+                model.scenarios.filter(scenario_type='base').first() or
+                model.scenarios.filter(is_active=True).first() or
+                model.scenarios.first()
+            )
+            
+            if not scenario:
+                return Response(
+                    {'error': 'No scenarios found for this model'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            from .pdf_export import PDFExporter
+            exporter = PDFExporter()
+            pdf_buffer = exporter.export_scenario(scenario)
+            
+            response = HttpResponse(
+                pdf_buffer.getvalue(),
+                content_type='application/pdf'
+            )
+            response['Content-Disposition'] = f'attachment; filename="{model.name}_Report.pdf"'
+            
+            return response
+            
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ============================================================================
