@@ -64,6 +64,18 @@ class PDFExporter:
             'MetaValue', parent=self.styles['Normal'],
             fontSize=11, textColor=TEXT, fontName='Helvetica-Bold',
         ))
+        self.styles.add(ParagraphStyle(
+            'TOCEntry', parent=self.styles['Normal'],
+            fontSize=10, textColor=TEXT, spaceAfter=6,
+        ))
+        self.styles.add(ParagraphStyle(
+            'ExecTitle', parent=self.styles['Heading3'],
+            fontSize=13, textColor=ACCENT, spaceBefore=16, spaceAfter=8,
+        ))
+        self.styles.add(ParagraphStyle(
+            'ExecMetric', parent=self.styles['Normal'],
+            fontSize=10, textColor=TEXT,
+        ))
 
     # ────────────────────────────────────────────────────────────────────────
     # Public API
@@ -86,13 +98,6 @@ class PDFExporter:
 
         elements = []
 
-        # Cover page
-        elements += self._build_cover(scenario)
-        elements.append(PageBreak())
-
-        # Build statement pages from calculated data
-        from .models import CalculatedStatement
-
         statement_configs = [
             ('is', 'Income Statement'),
             ('bs', 'Balance Sheet'),
@@ -101,6 +106,20 @@ class PDFExporter:
             ('debt', 'Debt Schedule'),
             ('valuation', 'Valuation Metrics'),
         ]
+
+        # Cover page
+        elements += self._build_cover(scenario)
+        elements.append(PageBreak())
+
+        # Executive Summary
+        elements += self._build_executive_summary(scenario)
+
+        # Table of Contents
+        elements += self._build_table_of_contents(statement_configs)
+        elements.append(PageBreak())
+
+        # Build statement pages from calculated data
+        from .models import CalculatedStatement
 
         for stmt_type, title in statement_configs:
             stmts = CalculatedStatement.objects.filter(
@@ -183,6 +202,107 @@ class PDFExporter:
         ]))
         elements.append(meta_table)
 
+        return elements
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Executive Summary
+    # ────────────────────────────────────────────────────────────────────────
+
+    def _build_executive_summary(self, scenario):
+        elements = []
+        from .models import CalculatedStatement
+
+        elements.append(Paragraph('Executive Summary', self.styles['ExecTitle']))
+        elements.append(HRFlowable(
+            width='100%', thickness=1, color=colors.HexColor('#e2e8f0'),
+            spaceAfter=12
+        ))
+
+        # Gather key metrics
+        metrics = []
+
+        # Valuation metrics
+        val_stmts = CalculatedStatement.objects.filter(scenario=scenario, statement_type='valuation')
+        if val_stmts.exists():
+            for stmt in val_stmts:
+                if stmt.values_by_period:
+                    for key, val in stmt.values_by_period.items():
+                        if key in ('NPV', 'IRR', 'Terminal Value', 'Payback Period'):
+                            if isinstance(val, (int, float, Decimal)):
+                                val = float(val)
+                                if key == 'IRR':
+                                    metrics.append([key, f'{val * 100:.1f}%' if val < 1 else f'{val:.1f}%'])
+                                elif key == 'Payback Period':
+                                    metrics.append([key, f'{val:.1f} years'])
+                                else:
+                                    metrics.append([key, f'${val / 1e6:,.2f}M' if abs(val) >= 1e6 else f'${val:,.0f}'])
+
+        # DSCR from ratios
+        ratio_stmts = CalculatedStatement.objects.filter(scenario=scenario, statement_type='ratio', line_item='DSCR')
+        if ratio_stmts.exists():
+            dscr_stmt = ratio_stmts.first()
+            if dscr_stmt and dscr_stmt.values_by_period:
+                dscr_vals = [float(v) for v in dscr_stmt.values_by_period.values() if isinstance(v, (int, float, Decimal)) and float(v) > 0]
+                if dscr_vals:
+                    metrics.append(['Min DSCR', f'{min(dscr_vals):.2f}x'])
+                    metrics.append(['Avg DSCR', f'{sum(dscr_vals)/len(dscr_vals):.2f}x'])
+
+        if metrics:
+            # Build 2-column metrics display
+            metric_data = []
+            for i in range(0, len(metrics), 2):
+                row = [metrics[i][0], metrics[i][1]]
+                if i + 1 < len(metrics):
+                    row += [metrics[i+1][0], metrics[i+1][1]]
+                else:
+                    row += ['', '']
+                metric_data.append(row)
+
+            metric_table = Table(metric_data, colWidths=[3 * inch, 3 * inch, 3 * inch, 3 * inch])
+            metric_table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),
+                ('FONTNAME', (2, 0), (2, -1), 'Helvetica'),
+                ('FONTNAME', (1, 0), (1, -1), 'Helvetica-Bold'),
+                ('FONTNAME', (3, 0), (3, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 11),
+                ('TEXTCOLOR', (0, 0), (0, -1), MUTED),
+                ('TEXTCOLOR', (2, 0), (2, -1), MUTED),
+                ('TEXTCOLOR', (1, 0), (1, -1), ACCENT),
+                ('TEXTCOLOR', (3, 0), (3, -1), ACCENT),
+                ('TOPPADDING', (0, 0), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+                ('LINEBELOW', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f8fafc')),
+            ]))
+            elements.append(metric_table)
+        else:
+            elements.append(Paragraph('No valuation metrics calculated yet.', self.styles['Normal']))
+
+        elements.append(Spacer(1, 0.5 * cm))
+        return elements
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Table of Contents
+    # ────────────────────────────────────────────────────────────────────────
+
+    def _build_table_of_contents(self, statement_configs):
+        elements = []
+        elements.append(Paragraph('Table of Contents', self.styles['ExecTitle']))
+        elements.append(HRFlowable(
+            width='100%', thickness=1, color=colors.HexColor('#e2e8f0'),
+            spaceAfter=10
+        ))
+
+        toc_items = [
+            '1. Executive Summary',
+        ]
+        for idx, (_, title) in enumerate(statement_configs, start=2):
+            toc_items.append(f'{idx}. {title}')
+
+        for item in toc_items:
+            elements.append(Paragraph(item, self.styles['TOCEntry']))
+
+        elements.append(Spacer(1, 0.5 * cm))
         return elements
 
     # ────────────────────────────────────────────────────────────────────────
@@ -336,11 +456,18 @@ class PDFExporter:
         canvas.setFillColor(MUTED)
 
         page_width = landscape(A4)[0]
+        page_height = landscape(A4)[1]
 
         # Left: branding
         canvas.drawString(
             1.5 * cm, 0.75 * cm,
             'Generated by Playground Financial Modeling Platform'
+        )
+
+        # Center: date
+        canvas.drawCentredString(
+            page_width / 2, 0.75 * cm,
+            f'Report Date: {datetime.now().strftime("%B %d, %Y")}'
         )
 
         # Right: page number
@@ -351,6 +478,9 @@ class PDFExporter:
 
         # Top rule
         canvas.setStrokeColor(colors.HexColor('#e2e8f0'))
-        canvas.line(1.5 * cm, landscape(A4)[1] - 1.5 * cm, page_width - 1.5 * cm, landscape(A4)[1] - 1.5 * cm)
+        canvas.line(1.5 * cm, page_height - 1.5 * cm, page_width - 1.5 * cm, page_height - 1.5 * cm)
+
+        # Bottom rule
+        canvas.line(1.5 * cm, 1.2 * cm, page_width - 1.5 * cm, 1.2 * cm)
 
         canvas.restoreState()

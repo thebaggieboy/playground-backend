@@ -241,7 +241,7 @@ class FinancialModelViewSet(viewsets.ModelViewSet):
         file_size = uploaded_file.size
         ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
         
-        MAX_PREVIEW_ROWS = 200  # Limit rows for performance
+        MAX_PREVIEW_ROWS = 500  # Preview rows for performance
         
         try:
             sheets = []
@@ -282,10 +282,10 @@ class FinancialModelViewSet(viewsets.ModelViewSet):
                     
                     sheets.append({
                         'name': sheet_name,
-                        'headers': headers[:50],  # Limit columns
-                        'rows': [r[:50] for r in rows_data],
+                        'headers': headers,
+                        'rows': rows_data,
                         'totalRows': row_count,
-                        'totalCols': min(max_col, 50),
+                        'totalCols': max_col,
                     })
                 
                 wb.close()
@@ -321,10 +321,10 @@ class FinancialModelViewSet(viewsets.ModelViewSet):
                 
                 sheets.append({
                     'name': 'Sheet1',
-                    'headers': headers[:50],
-                    'rows': [r[:50] for r in rows_data],
+                    'headers': headers,
+                    'rows': rows_data,
                     'totalRows': row_count,
-                    'totalCols': min(max_col, 50),
+                    'totalCols': max_col,
                 })
             
             elif ext == 'pdf':
