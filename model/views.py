@@ -25,14 +25,16 @@ class StandardResultsPagination(PageNumberPagination):
     max_page_size = 100
 
 from .models import (
-    FinancialModel, Scenario, CalculatedStatement, ModelTemplate, CalculationLog
+    FinancialModel, Scenario, CalculatedStatement, ModelTemplate, CalculationLog,
+    ChatSession, ChatMessage
 )
 from .serializers import (
     FinancialModelListSerializer, FinancialModelDetailSerializer,
     FinancialModelCreateSerializer, ScenarioListSerializer,
     ScenarioDetailSerializer, ScenarioCreateUpdateSerializer,
     CalculatedStatementSerializer, ModelTemplateSerializer,
-    TemplateCreateFromScenarioSerializer, CalculationLogSerializer
+    TemplateCreateFromScenarioSerializer, CalculationLogSerializer,
+    ChatSessionListSerializer, ChatSessionDetailSerializer, ChatMessageSerializer
 )
 
 
@@ -806,3 +808,37 @@ class CalculationLogViewSet(viewsets.ReadOnlyModelViewSet):
         return CalculationLog.objects.filter(
             scenario__model__owner=self.request.user
         ).select_related('scenario', 'triggered_by')
+
+
+# ============================================================================
+# CHAT SESSIONS VIEWSET
+# ============================================================================
+
+class ChatSessionViewSet(viewsets.ModelViewSet):
+    """
+    Manage chat sessions and add messages
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        return ChatSession.objects.filter(user=self.request.user)
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ChatSessionListSerializer
+        return ChatSessionDetailSerializer
+        
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+        
+    @action(detail=True, methods=['post'])
+    def messages(self, request, pk=None):
+        """Append a message to a session"""
+        session = self.get_object()
+        serializer = ChatMessageSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            serializer.save(session=session)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

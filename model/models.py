@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
 import json
+import uuid
 
 User = get_user_model()
 
@@ -527,3 +528,41 @@ class CalculationLog(models.Model):
     
     class Meta:
         ordering = ['-started_at']
+
+
+# ============================================================================
+# CHAT SESSIONS
+# ============================================================================
+
+class ChatSession(models.Model):
+    """
+    Groups chat messages into a logical session
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='chat_sessions')
+    title = models.CharField(max_length=255, default='New Chat')
+    financial_model = models.ForeignKey(FinancialModel, on_delete=models.SET_NULL, null=True, blank=True, related_name='chat_sessions')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"{self.title} - {self.user.username}"
+
+
+class ChatMessage(models.Model):
+    """
+    Individual chat messages in a session
+    """
+    session = models.ForeignKey(ChatSession, on_delete=models.CASCADE, related_name='messages')
+    role = models.CharField(max_length=50)  # 'user', 'assistant'
+    content = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['timestamp']
+
+    def __str__(self):
+        return f"{self.role} at {self.timestamp}"

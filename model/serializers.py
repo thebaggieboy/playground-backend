@@ -9,7 +9,8 @@ from .models import (
     FinancialModel, Scenario, ProjectInformation, MacroAssumptions,
     RevenueProduct, OperatingExpenses, CapitalExpenditure, DebtFinancing,
     TaxAssumptions, WorkingCapital, DepreciationSchedule, DividendPolicy,
-    ExitValuation, CalculatedStatement, ModelTemplate, CalculationLog
+    ExitValuation, CalculatedStatement, ModelTemplate, CalculationLog,
+    ChatSession, ChatMessage
 )
 
 
@@ -513,3 +514,28 @@ class CalculationLogSerializer(serializers.ModelSerializer):
             'id', 'status', 'started_at', 'completed_at',
             'duration_seconds', 'error_message', 'triggered_by_name'
         ]
+
+# ============================================================================
+# CHAT SERIALIZERS
+# ============================================================================
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatMessage
+        fields = ['id', 'role', 'content', 'timestamp']
+
+
+class ChatSessionListSerializer(serializers.ModelSerializer):
+    """Summarized view for the sidebar"""
+    class Meta:
+        model = ChatSession
+        fields = ['id', 'title', 'financial_model', 'created_at', 'updated_at']
+
+
+class ChatSessionDetailSerializer(serializers.ModelSerializer):
+    """Detailed view including all messages"""
+    messages = ChatMessageSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ChatSession
+        fields = ['id', 'title', 'financial_model', 'created_at', 'updated_at', 'messages']

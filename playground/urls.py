@@ -10,7 +10,8 @@ from model.views import (
     ScenarioViewSet,
     CalculatedStatementViewSet,
     ModelTemplateViewSet,
-    CalculationLogViewSet
+    CalculationLogViewSet,
+    ChatSessionViewSet
 )
 from reports.views import ReportViewSet
 
@@ -22,6 +23,7 @@ router.register(r'results', CalculatedStatementViewSet, basename='results')
 router.register(r'templates', ModelTemplateViewSet, basename='template')
 router.register(r'calculation-logs', CalculationLogViewSet, basename='calculationlog')
 router.register(r'reports', ReportViewSet, basename='report')
+router.register(r'chat-sessions', ChatSessionViewSet, basename='chatsession')
 
 urlpatterns = [
 

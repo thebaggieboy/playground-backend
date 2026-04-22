@@ -5,7 +5,8 @@ from .views import (
     ScenarioViewSet,
     CalculatedStatementViewSet,
     ModelTemplateViewSet,
-    CalculationLogViewSet
+    CalculationLogViewSet,
+    ChatSessionViewSet
 )
 
 router = DefaultRouter()
@@ -14,6 +15,7 @@ router.register(r'scenarios', ScenarioViewSet, basename='scenario')
 router.register(r'results', CalculatedStatementViewSet, basename='results')
 router.register(r'templates', ModelTemplateViewSet, basename='template')
 router.register(r'calculation-logs', CalculationLogViewSet, basename='calculationlog')
+router.register(r'chat-sessions', ChatSessionViewSet, basename='chatsession')
 
 urlpatterns = [
     path('api/', include(router.urls)),
