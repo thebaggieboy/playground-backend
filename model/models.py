@@ -448,6 +448,11 @@ class CalculatedStatement(models.Model):
         ('ratio', 'Financial Ratios'),
         ('debt', 'Debt Schedule'),
         ('valuation', 'Valuation Metrics'),
+        ('revenue', 'Revenue & Receivables Schedule'),
+        ('opex', 'OpEx & Payables Schedule'),
+        ('fixed_assets', 'Fixed Assets & Depreciation'),
+        ('tax', 'Tax & Allowances Schedule'),
+        ('dividend', 'Reserve Accounts & Dividends'),
     ]
     
     scenario = models.ForeignKey(Scenario, on_delete=models.CASCADE, related_name='calculated_statements')

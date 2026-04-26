@@ -110,7 +110,8 @@ class CalculationEngine:
             if save_results:
                 self._save_results(
                     income_statement, balance_sheet, cash_flow_statement,
-                    ratios, valuation, debt_schedule
+                    ratios, valuation, debt_schedule,
+                    revenue_schedule, opex_schedule, capex_schedule, depreciation_schedule
                 )
             
             # Update log
@@ -1036,6 +1037,43 @@ class CalculationEngine:
             
             ratios['DSCR'] = dscr
             
+            # LLCR (Loan Life Coverage Ratio) & PLCR (Project Life Coverage Ratio)
+            llcr = {}
+            plcr = {}
+            try:
+                cost_of_debt = float(self.debt.base_rate_value + self.debt.interest_margin_spread) / 100.0
+            except Exception:
+                cost_of_debt = 0.10  # Fallback
+
+            for i, period in enumerate(self.periods):
+                outstanding_debt = float(debt_schedule['Opening Balance'].get(period, 0))
+                if outstanding_debt > 0:
+                    future_periods = self.periods[i:]
+                    
+                    # LLCR looks only at periods where the loan is active (balance or repayment exists)
+                    loan_periods = [p for p in future_periods if float(debt_schedule['Closing Balance'].get(p, 0)) > 0 or float(debt_schedule['Principal Repayment'].get(p, 0)) > 0]
+                    if not loan_periods:
+                        loan_periods = [period]
+                        
+                    npv_cfads_llcr = 0.0
+                    for t, p in enumerate(loan_periods):
+                        cfads = float(cash_flow_statement.get('Cash Flow from Operations', {}).get(p, 0))
+                        npv_cfads_llcr += cfads / ((1 + cost_of_debt) ** t)
+                    
+                    npv_cfads_plcr = 0.0
+                    for t, p in enumerate(future_periods):
+                        cfads = float(cash_flow_statement.get('Cash Flow from Operations', {}).get(p, 0))
+                        npv_cfads_plcr += cfads / ((1 + cost_of_debt) ** t)
+                    
+                    llcr[period] = Decimal(str(npv_cfads_llcr / outstanding_debt)).quantize(Decimal('0.01'))
+                    plcr[period] = Decimal(str(npv_cfads_plcr / outstanding_debt)).quantize(Decimal('0.01'))
+                else:
+                    llcr[period] = Decimal('0')
+                    plcr[period] = Decimal('0')
+            
+            ratios['LLCR'] = llcr
+            ratios['PLCR'] = plcr
+            
             # Debt-to-Equity
             debt_to_equity = {}
             for period in self.periods:
@@ -1096,6 +1134,27 @@ class CalculationEngine:
             else:
                 valuation['IRR (%)'] = Decimal('0')
             
+            # Payback Period Calculation
+            cumulative_cash = 0.0
+            payback_years = 0.0
+            payback_found = False
+            
+            for i, fcf in enumerate(fcf_series):
+                prev_cumulative = cumulative_cash
+                cumulative_cash += fcf
+                
+                # Check if it flipped from negative to positive
+                if cumulative_cash >= 0 and prev_cumulative < 0 and not payback_found:
+                    fraction = abs(prev_cumulative) / fcf if fcf > 0 else 0
+                    payback_years = i + fraction
+                    payback_found = True
+                    
+            if payback_found:
+                valuation['Payback Period (Years)'] = Decimal(str(payback_years)).quantize(Decimal('0.01'))
+            else:
+                valuation['Payback Period (Years)'] = Decimal('0')
+            
+            
             # Terminal Value (using Exit Multiple)
             final_year_ebitda = income_statement['EBITDA'][self.periods[-1]]
             terminal_value = final_year_ebitda * valuation_params.exit_multiple_ev_ebitda
@@ -1139,7 +1198,8 @@ class CalculationEngine:
     
     def _save_results(
         self, income_statement, balance_sheet, cash_flow_statement,
-        ratios, valuation, debt_schedule
+        ratios, valuation, debt_schedule,
+        revenue_schedule=None, opex_schedule=None, capex_schedule=None, depreciation_schedule=None
     ):
         """
         Save all calculated results to database.
@@ -1198,6 +1258,60 @@ class CalculationEngine:
             CalculatedStatement.objects.create(
                 scenario=self.scenario,
                 statement_type='debt',
+                line_item=line_item,
+                values_by_period=self._prepare_for_json(values)
+            )
+
+        # Save Revenue Schedule
+        if revenue_schedule:
+            for line_item, values in revenue_schedule.items():
+                CalculatedStatement.objects.create(
+                    scenario=self.scenario,
+                    statement_type='revenue',
+                    line_item=line_item,
+                    values_by_period=self._prepare_for_json(values)
+                )
+        
+        # Save OpEx Schedule
+        if opex_schedule:
+            for line_item, values in opex_schedule.items():
+                CalculatedStatement.objects.create(
+                    scenario=self.scenario,
+                    statement_type='opex',
+                    line_item=line_item,
+                    values_by_period=self._prepare_for_json(values)
+                )
+
+        # Save Fixed Assets / Depreciation Schedule
+        if depreciation_schedule:
+            for line_item, values in depreciation_schedule.items():
+                CalculatedStatement.objects.create(
+                    scenario=self.scenario,
+                    statement_type='fixed_assets',
+                    line_item=line_item,
+                    values_by_period=self._prepare_for_json(values)
+                )
+
+        # Build and Save Tax Schedule from Income Statement values
+        tax_lines = ['Corporate Tax', 'Education Tax', 'VAT / Sales Tax', 'Total Taxes']
+        tax_schedule = {k: income_statement.get(k, {}) for k in tax_lines if k in income_statement}
+        for line_item, values in tax_schedule.items():
+            CalculatedStatement.objects.create(
+                scenario=self.scenario,
+                statement_type='tax',
+                line_item=line_item,
+                values_by_period=self._prepare_for_json(values)
+            )
+
+        # Build and Save Dividend Schedule from Cash Flow Statement values
+        dividend_lines = ['Dividends Paid', 'Retained Earnings', 'Minimum Cash Buffer']
+        div_schedule = {k: cash_flow_statement.get(k, {}) for k in dividend_lines if k in cash_flow_statement}
+        if not 'Dividends Paid' in div_schedule and 'Cash Flow from Financing' in cash_flow_statement:
+            div_schedule['Dividends Paid'] = cash_flow_statement.get('Cash Flow from Financing', {}) # Fallback approximation
+        for line_item, values in div_schedule.items():
+            CalculatedStatement.objects.create(
+                scenario=self.scenario,
+                statement_type='dividend',
                 line_item=line_item,
                 values_by_period=self._prepare_for_json(values)
             )
