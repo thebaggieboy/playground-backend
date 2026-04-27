@@ -453,6 +453,7 @@ class CalculatedStatement(models.Model):
         ('fixed_assets', 'Fixed Assets & Depreciation'),
         ('tax', 'Tax & Allowances Schedule'),
         ('dividend', 'Reserve Accounts & Dividends'),
+        ('exit', 'Exit & Terminal Value'),
     ]
     
     scenario = models.ForeignKey(Scenario, on_delete=models.CASCADE, related_name='calculated_statements')

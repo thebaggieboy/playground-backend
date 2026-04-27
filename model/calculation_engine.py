@@ -1315,3 +1315,125 @@ class CalculationEngine:
                 line_item=line_item,
                 values_by_period=self._prepare_for_json(values)
             )
+
+        # ── Receivables & Working Capital Schedule (saved under 'revenue') ──
+        if getattr(self, 'working_capital', None):
+            rec_days = Decimal(str(self.working_capital.receivables_days_dso))
+            pay_days = Decimal(str(self.working_capital.payables_days_dpo))
+            inv_days = Decimal(str(self.working_capital.inventory_days_dio))
+
+            ar_schedule = {}
+            ap_schedule = {}
+            inv_schedule = {}
+            nwc_schedule = {}
+
+            for period in self.periods:
+                revenue = income_statement.get('Total Revenue', {}).get(period, Decimal('0'))
+                opex = income_statement.get('Total Operating Expenses', {}).get(period, Decimal('0'))
+
+                ar = (revenue * rec_days / Decimal('365')).quantize(Decimal('0.01'))
+                ap = (opex * pay_days / Decimal('365')).quantize(Decimal('0.01'))
+                inv = (opex * inv_days / Decimal('365')).quantize(Decimal('0.01'))
+
+                ar_schedule[period] = ar
+                ap_schedule[period] = ap
+                inv_schedule[period] = inv
+                nwc_schedule[period] = (ar + inv - ap).quantize(Decimal('0.01'))
+
+            for label, vals in [
+                ('Accounts Receivable (DSO)', ar_schedule),
+                ('Inventory (DIO)', inv_schedule),
+                ('Accounts Payable (DPO)', ap_schedule),
+                ('Net Working Capital', nwc_schedule),
+            ]:
+                CalculatedStatement.objects.create(
+                    scenario=self.scenario,
+                    statement_type='revenue',
+                    line_item=label,
+                    values_by_period=self._prepare_for_json(vals)
+                )
+
+        # ── Reserve Accounts / DSRA (saved under 'dividend') ──
+        try:
+            dsra_target = {}
+            dsra_balance = {}
+            dsra_deposit = {}
+            dsra_release = {}
+
+            # DSRA target = 6 months of upcoming debt service (principal + interest)
+            months_cover = 6
+            for i, period in enumerate(self.periods):
+                principal = debt_schedule.get('Principal Repayment', {}).get(period, Decimal('0'))
+                interest = debt_schedule.get('Interest Expense', {}).get(period, Decimal('0'))
+                annual_ds = principal + interest
+                target = (annual_ds * Decimal(str(months_cover)) / Decimal('12')).quantize(Decimal('0.01'))
+                dsra_target[period] = target
+
+            prev_balance = Decimal('0')
+            for period in self.periods:
+                target = dsra_target[period]
+                if target > prev_balance:
+                    deposit = (target - prev_balance).quantize(Decimal('0.01'))
+                    release = Decimal('0')
+                else:
+                    deposit = Decimal('0')
+                    release = (prev_balance - target).quantize(Decimal('0.01'))
+
+                dsra_deposit[period] = deposit
+                dsra_release[period] = release
+                dsra_balance[period] = target
+                prev_balance = target
+
+            for label, vals in [
+                ('DSRA Target (6-mo DS)', dsra_target),
+                ('DSRA Deposit', dsra_deposit),
+                ('DSRA Release', dsra_release),
+                ('DSRA Closing Balance', dsra_balance),
+            ]:
+                CalculatedStatement.objects.create(
+                    scenario=self.scenario,
+                    statement_type='dividend',
+                    line_item=label,
+                    values_by_period=self._prepare_for_json(vals)
+                )
+        except Exception as e:
+            logger.error(f"Error calculating DSRA: {str(e)}")
+
+        # ── Exit & Terminal Value Schedule (saved under 'exit') ──
+        try:
+            exit_schedule = {}
+            if getattr(self, 'valuation', None):
+                exit_year = getattr(self.valuation, 'exit_year', len(self.periods))
+                exit_multiple = getattr(self.valuation, 'exit_multiple_ev_ebitda', Decimal('0'))
+
+                exit_ebitda = {}
+                enterprise_value = {}
+                net_debt_at_exit = {}
+                equity_value_at_exit = {}
+
+                for period in self.periods:
+                    ebitda = income_statement.get('EBITDA', {}).get(period, Decimal('0'))
+                    exit_ebitda[period] = ebitda
+                    ev = (ebitda * exit_multiple).quantize(Decimal('0.01'))
+                    enterprise_value[period] = ev
+
+                    outstanding_debt = debt_schedule.get('Outstanding Balance', {}).get(period, Decimal('0'))
+                    cash = cash_flow_statement.get('Cash Balance (End)', {}).get(period, Decimal('0'))
+                    nd = (outstanding_debt - cash).quantize(Decimal('0.01'))
+                    net_debt_at_exit[period] = nd
+                    equity_value_at_exit[period] = (ev - nd).quantize(Decimal('0.01'))
+
+                for label, vals in [
+                    ('EBITDA at Exit', exit_ebitda),
+                    (f'Enterprise Value ({exit_multiple}x EBITDA)', enterprise_value),
+                    ('Net Debt at Exit', net_debt_at_exit),
+                    ('Equity Value at Exit', equity_value_at_exit),
+                ]:
+                    CalculatedStatement.objects.create(
+                        scenario=self.scenario,
+                        statement_type='exit',
+                        line_item=label,
+                        values_by_period=self._prepare_for_json(vals)
+                    )
+        except Exception as e:
+            logger.error(f"Error calculating exit schedule: {str(e)}")

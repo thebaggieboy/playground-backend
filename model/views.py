@@ -395,20 +395,32 @@ class FinancialModelViewSet(viewsets.ModelViewSet):
                 
                 # Keywords to search for
                 KEYWORD_MAP = {
-                    'Revenue': ['revenue', 'sales', 'turnover', 'total income'],
+                    'Total Revenue': ['total revenue', 'revenue', 'sales', 'total income'],
                     'COGS': ['cogs', 'cost of sales', 'direct costs', 'variable cost'],
                     'Gross Profit': ['gross profit', 'gp'],
-                    'OpEx': ['operating expenses', 'opex', 'indirect costs', 'admin expenses', 'total expense'],
-                    'EBITDA': ['ebitda'],
+                    'Total Operating Expenses': ['total operating expenses', 'operating expenses', 'opex', 'indirect costs', 'total expense'],
+                    'EBITDA': ['ebitda', 'earnings before'],
+                    'EBIT': ['ebit', 'operating profit'],
                     'Net Income': ['net income', 'pat', 'profit after tax', 'net profit'],
+                    'Total Assets': ['total assets', 'total asset'],
+                    'Total Liabilities': ['total liabilities', 'total liability'],
+                    'Total Equity': ['total equity', 'shareholders equity', 'shareholder equity'],
+                    'Cash': ['cash', 'closing cash', 'cash and cash equivalents'],
+                    'Cash Flow from Operations': ['cash flow from operations', 'operating cash flow', 'cfo'],
+                    'Cash Flow from Investing': ['cash flow from investing', 'investing cash flow', 'cfi'],
+                    'Cash Flow from Financing': ['cash flow from financing', 'financing cash flow', 'cff'],
+                    'Net Cash Flow': ['net cash flow', 'change in cash'],
                     'NPV': ['npv', 'net present value'],
-                    'IRR': ['irr', 'internal rate of return']
+                    'IRR (%)': ['irr', 'internal rate of return'],
+                    'DSCR': ['dscr', 'debt service coverage ratio']
                 }
                 
                 # Statement type mapping
                 STMT_TYPE_MAP = {
-                    'Revenue': 'is', 'COGS': 'is', 'Gross Profit': 'is', 'OpEx': 'is', 'EBITDA': 'is', 'Net Income': 'is',
-                    'NPV': 'valuation', 'IRR': 'valuation'
+                    'Total Revenue': 'is', 'COGS': 'is', 'Gross Profit': 'is', 'Total Operating Expenses': 'is', 'EBITDA': 'is', 'EBIT': 'is', 'Net Income': 'is',
+                    'Total Assets': 'bs', 'Total Liabilities': 'bs', 'Total Equity': 'bs', 'Cash': 'bs',
+                    'Cash Flow from Operations': 'cfs', 'Cash Flow from Investing': 'cfs', 'Cash Flow from Financing': 'cfs', 'Net Cash Flow': 'cfs',
+                    'NPV': 'valuation', 'IRR (%)': 'valuation', 'DSCR': 'ratio'
                 }
                 
                 for sheet in sheets:
