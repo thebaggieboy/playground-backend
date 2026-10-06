@@ -227,15 +227,21 @@ class PDFExporter:
             for stmt in val_stmts:
                 if stmt.values_by_period:
                     for key, val in stmt.values_by_period.items():
-                        if key in ('NPV', 'IRR', 'Terminal Value', 'Payback Period'):
-                            if isinstance(val, (int, float, Decimal)):
-                                val = float(val)
-                                if key == 'IRR':
-                                    metrics.append([key, f'{val * 100:.1f}%' if val < 1 else f'{val:.1f}%'])
-                                elif key == 'Payback Period':
-                                    metrics.append([key, f'{val:.1f} years'])
-                                else:
-                                    metrics.append([key, f'${val / 1e6:,.2f}M' if abs(val) >= 1e6 else f'${val:,.0f}'])
+                        if key in (
+                            'NPV', 'IRR (%)', 'Equity IRR (%)', 'Equity MOIC (x)',
+                            'Terminal Value', 'Exit Transaction Costs',
+                            'Exit Enterprise Value', 'Exit Equity Value',
+                            'Payback Period (Years)',
+                        ) and isinstance(val, (int, float, Decimal)):
+                            val = float(val)
+                            if key.endswith('(%)'):
+                                metrics.append([key, f'{val:.1f}%'])
+                            elif key.endswith('(x)'):
+                                metrics.append([key, f'{val:.2f}x'])
+                            elif key == 'Payback Period (Years)':
+                                metrics.append([key, f'{val:.1f} years'])
+                            else:
+                                metrics.append([key, f'${val / 1e6:,.2f}M' if abs(val) >= 1e6 else f'${val:,.0f}'])
 
         # DSCR from ratios
         ratio_stmts = CalculatedStatement.objects.filter(scenario=scenario, statement_type='ratio', line_item='DSCR')
