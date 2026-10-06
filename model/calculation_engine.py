@@ -4,7 +4,7 @@ Implements 3-statement financial model with formulas
 Based on standard financial modeling practices
 """
 
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import datetime, timedelta
 from django.utils import timezone
 from typing import Dict, List
@@ -19,6 +19,10 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class InvalidIndustryLibraryInputError(ValueError):
+    pass
 
 
 class CalculationEngine:
@@ -268,7 +272,43 @@ class CalculationEngine:
                 year_1_price = Decimal(str(product.unit_price_year_1 or '0'))
                 volume_growth = Decimal(str(product.volume_growth_rate or '0'))
                 price_escalation = Decimal(str(product.price_escalation_rate or '0'))
-                
+
+                # Use a sourced solar P50 generation estimate when the core revenue
+                # form has no volume; the native volume/price inputs remain authoritative.
+                if (
+                    year_1_volume == 0
+                    and self.project_info
+                    and self.project_info.industry_sector == "Energy & Power"
+                    and self.project_info.industry_sub_type == "Solar"
+                    and product.unit_of_measure.strip().lower() in {
+                    "mwh", "mwh/year", "mwh per year",
+                    }
+                ):
+                    project_info = self.project_info
+                    library_scope = (
+                        f"{project_info.industry_sector}:{project_info.industry_sub_type}:project"
+                        if project_info else ""
+                    )
+                    project_inputs = (
+                        project_info.industry_library_inputs.get(library_scope, {})
+                        if project_info and isinstance(project_info.industry_library_inputs, dict)
+                        else {}
+                    )
+                    p50_yield = project_inputs.get("p50Yield")
+                    if p50_yield not in (None, ""):
+                        try:
+                            library_volume = Decimal(str(p50_yield))
+                        except (InvalidOperation, ValueError, TypeError) as exc:
+                            logger.error("Invalid solar P50 annual yield in industry library inputs: %s", exc)
+                            raise InvalidIndustryLibraryInputError(
+                                "Solar P50 annual yield must be a valid number."
+                            ) from exc
+                        if not library_volume.is_finite() or library_volume < 0:
+                            raise InvalidIndustryLibraryInputError(
+                                "Solar P50 annual yield must be a finite, non-negative number."
+                            )
+                        year_1_volume = library_volume
+
                 for i, period in enumerate(self.periods):
                     # Real Estate specialized revenue logic
                     if product.number_of_units and product.sale_price_per_unit:
@@ -305,6 +345,8 @@ class CalculationEngine:
                 
                 revenue_schedule[product.product_name] = product_revenue
                 
+        except InvalidIndustryLibraryInputError:
+            raise
         except Exception as e:
             logger.error(f"Error calculating revenue: {str(e)}")
             # Return empty schedule

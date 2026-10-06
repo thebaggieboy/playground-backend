@@ -104,6 +104,11 @@ class ProjectInformation(models.Model):
     project_name = models.CharField(max_length=255)
     project_location = models.CharField(max_length=255, blank=True)
     industry_sector = models.CharField(max_length=100)
+    industry_sub_type = models.CharField(max_length=150, blank=True)
+    industry_custom_name = models.CharField(max_length=150, blank=True)
+    industry_library_inputs = models.JSONField(default=dict, blank=True)
+    industry_library_metadata = models.JSONField(default=dict, blank=True)
+    industry_library_schema = models.JSONField(default=dict, blank=True)
     project_type = models.CharField(max_length=50)  # Greenfield, Brownfield, etc.
     
     # Timeline

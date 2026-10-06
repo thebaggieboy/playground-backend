@@ -13,6 +13,11 @@ from django.utils import timezone
 from datetime import datetime
 import io
 import json
+import math
+import os
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 
 # ============================================================================
@@ -58,6 +63,63 @@ class FinancialModelViewSet(viewsets.ModelViewSet):
         elif self.action == 'list':
             return FinancialModelListSerializer
         return FinancialModelDetailSerializer
+
+    @action(detail=False, methods=['get'], url_path='oanda-rate')
+    def oanda_rate(self, request):
+        """Return a USD conversion rate using OANDA_ACCESS_TOKEN and OANDA_ACCOUNT_ID."""
+        quote = request.query_params.get('quote', 'NGN').upper()
+        if quote not in {'USD', 'NGN', 'EUR'}:
+            return Response({'detail': 'Supported reporting currencies are USD, NGN, and EUR.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if quote == 'USD':
+            return Response({'base': 'USD', 'quote': 'USD', 'rate': 1, 'source': 'OANDA'})
+
+        access_token = os.getenv('OANDA_ACCESS_TOKEN')
+        account_id = os.getenv('OANDA_ACCOUNT_ID')
+        if not access_token or not account_id:
+            return Response({'detail': 'OANDA is not configured. Enter the exchange rate manually.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        environment = os.getenv('OANDA_ENVIRONMENT', 'practice').lower()
+        host = 'https://api-fxtrade.oanda.com' if environment == 'live' else 'https://api-fxpractice.oanda.com'
+        instrument = 'USD_NGN' if quote == 'NGN' else 'EUR_USD'
+        query = urlencode({'instruments': instrument})
+        url = f'{host}/v3/accounts/{account_id}/pricing?{query}'
+        oanda_request = Request(url, headers={
+            'Authorization': f'Bearer {access_token}',
+            'Accept': 'application/json',
+        })
+
+        try:
+            with urlopen(oanda_request, timeout=10) as response:
+                payload = json.loads(response.read().decode('utf-8'))
+        except HTTPError as error:
+            message = 'OANDA rejected the configured credentials.' if error.code == 401 else 'OANDA could not provide this currency pair.'
+            return Response({'detail': message}, status=status.HTTP_502_BAD_GATEWAY)
+        except (URLError, TimeoutError):
+            return Response({'detail': 'Could not connect to OANDA. Enter the exchange rate manually.'}, status=status.HTTP_502_BAD_GATEWAY)
+        except (ValueError, KeyError):
+            return Response({'detail': 'OANDA returned an invalid exchange rate.'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        prices = payload.get('prices', [])
+        if not prices or not prices[0].get('bids') or not prices[0].get('asks'):
+            return Response({'detail': 'OANDA returned no usable price for this currency pair.'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        try:
+            bid = float(prices[0]['bids'][0]['price'])
+            ask = float(prices[0]['asks'][0]['price'])
+            midpoint = (bid + ask) / 2
+            if not math.isfinite(midpoint) or midpoint <= 0:
+                raise ValueError('Invalid OANDA midpoint')
+            rate = 1 / midpoint if quote == 'EUR' else midpoint
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return Response({'detail': 'OANDA returned an invalid exchange rate.'}, status=status.HTTP_502_BAD_GATEWAY)
+        return Response({
+            'base': 'USD',
+            'quote': quote,
+            'rate': rate,
+            'source': 'OANDA',
+            'as_of': prices[0].get('time'),
+        })
     
     @action(detail=True, methods=['post'])
     def calculate(self, request, pk=None):

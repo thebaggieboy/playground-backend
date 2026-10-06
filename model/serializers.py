@@ -4,7 +4,9 @@ Supports complete input/output serialization for 170+ variables
 """
 
 from rest_framework import serializers
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from datetime import date
+import math
 from .models import (
     FinancialModel, Scenario, ProjectInformation, MacroAssumptions,
     RevenueProduct, OperatingExpenses, CapitalExpenditure, DebtFinancing,
@@ -22,6 +24,119 @@ class ProjectInformationSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProjectInformation
         exclude = ['id', 'scenario']
+
+    def validate_industry_library_inputs(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Industry library inputs must be an object keyed by industry scope.")
+        if len(value) > 100:
+            raise serializers.ValidationError("Industry library inputs cannot contain more than 100 scopes.")
+        for scope, fields in value.items():
+            if not isinstance(scope, str) or not isinstance(fields, dict):
+                raise serializers.ValidationError("Each industry scope must contain an object of field values.")
+            if len(fields) > 500:
+                raise serializers.ValidationError(f"Scope '{scope}' cannot contain more than 500 fields.")
+            for field_id, field_value in fields.items():
+                if not isinstance(field_id, str) or not isinstance(field_value, (str, int, float, bool, type(None))):
+                    raise serializers.ValidationError(
+                        "Industry library values must be scalar strings, numbers, booleans, or null."
+                    )
+                if isinstance(field_value, float) and not math.isfinite(field_value):
+                    raise serializers.ValidationError("Industry library numeric values must be finite.")
+        return value
+
+    def validate_industry_library_metadata(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Industry library metadata must be an object.")
+        return value
+
+    def validate_industry_library_schema(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Industry library schema must be an object.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        data = self.initial_data
+        industry = data.get("industry_sector", attrs.get("industry_sector", ""))
+        sub_type = data.get("industry_sub_type", attrs.get("industry_sub_type", ""))
+        scope_prefix = f"{industry}:{sub_type}:"
+        inputs = data.get("industry_library_inputs", attrs.get("industry_library_inputs", {}))
+        schema = data.get("industry_library_schema", attrs.get("industry_library_schema", {}))
+
+        if not isinstance(inputs, dict) or not isinstance(schema, dict):
+            return attrs
+
+        source_fields = {"sourceTier", "sourceReference", "sourceDate", "licence"}
+        for scope, values in inputs.items():
+            if not scope.startswith(scope_prefix) or not isinstance(values, dict):
+                continue
+            domain = scope[len(scope_prefix):]
+            definitions = schema.get(domain, [])
+            definitions_by_id = {
+                field.get("id"): field
+                for field in definitions
+                if isinstance(field, dict) and isinstance(field.get("id"), str)
+            } if isinstance(definitions, list) else {}
+            numeric_values = []
+            for field_id, value in values.items():
+                if field_id in source_fields or value in (None, ""):
+                    continue
+                definition = definitions_by_id.get(field_id)
+                if not definition:
+                    continue
+                if definition.get("type") == "number":
+                    try:
+                        number = Decimal(str(value))
+                    except (InvalidOperation, ValueError, TypeError) as exc:
+                        raise serializers.ValidationError(
+                            {f"industry_library_inputs.{scope}.{field_id}": "Enter a valid numeric value."}
+                        ) from exc
+                    if not number.is_finite():
+                        raise serializers.ValidationError(
+                            {f"industry_library_inputs.{scope}.{field_id}": "Value must be finite."}
+                        )
+                    bounds = definition.get("validation", {})
+                    if "minimum" in bounds and number < Decimal(str(bounds["minimum"])):
+                        raise serializers.ValidationError(
+                            {f"industry_library_inputs.{scope}.{field_id}": f"Value must be at least {bounds['minimum']}."}
+                        )
+                    if "maximum" in bounds and number > Decimal(str(bounds["maximum"])):
+                        raise serializers.ValidationError(
+                            {f"industry_library_inputs.{scope}.{field_id}": f"Value must be at most {bounds['maximum']}."}
+                        )
+                    numeric_values.append(field_id)
+                elif definition.get("type") == "select" and value not in definition.get("options", []):
+                    raise serializers.ValidationError(
+                        {f"industry_library_inputs.{scope}.{field_id}": "Select a value from the supplied options."}
+                    )
+
+            if numeric_values:
+                tier = str(values.get("sourceTier", ""))
+                reference = str(values.get("sourceReference", "")).strip()
+                allowed_tiers = {
+                    "Tier 1: Official and primary",
+                    "Tier 2: Institutional and industry",
+                    "Tier 3: Commercial data",
+                    "Tier 4: Market and user data",
+                }
+                if tier not in allowed_tiers or not reference:
+                    raise serializers.ValidationError(
+                        {f"industry_library_inputs.{scope}": "Numeric library inputs require a source tier and source/reference or project-override rationale."}
+                    )
+                if tier.startswith(("Tier 1", "Tier 2", "Tier 3")):
+                    source_date = str(values.get("sourceDate", "")).strip()
+                    licence = str(values.get("licence", "")).strip()
+                    try:
+                        date.fromisoformat(source_date)
+                    except ValueError as exc:
+                        raise serializers.ValidationError(
+                            {f"industry_library_inputs.{scope}": "Tier 1–3 values require a valid YYYY-MM-DD source date."}
+                        ) from exc
+                    if not licence:
+                        raise serializers.ValidationError(
+                            {f"industry_library_inputs.{scope}": "Tier 1–3 values require a licence / usage-rights record."}
+                        )
+        return attrs
 
 
 class MacroAssumptionsSerializer(serializers.ModelSerializer):
@@ -205,6 +320,7 @@ class ScenarioDetailSerializer(serializers.ModelSerializer):
     Used for GET requests to retrieve all data
     """
     project_info = ProjectInformationSerializer(required=False)
+    model_id = serializers.IntegerField(source='model.id', read_only=True)
     macro_assumptions = MacroAssumptionsSerializer(required=False)
     revenue_products = RevenueProductSerializer(many=True, required=False)
     operating_expenses = OperatingExpensesSerializer(required=False)
@@ -219,7 +335,7 @@ class ScenarioDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Scenario
         fields = [
-            'id', 'name', 'scenario_type', 'is_active', 'created_at',
+            'id', 'model_id', 'name', 'scenario_type', 'is_active', 'created_at',
             'project_info', 'macro_assumptions', 'revenue_products',
             'operating_expenses', 'capital_expenditure', 'debt_financing',
             'tax_assumptions', 'working_capital', 'depreciation_schedules',
