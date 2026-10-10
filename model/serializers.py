@@ -25,6 +25,16 @@ class ProjectInformationSerializer(serializers.ModelSerializer):
         model = ProjectInformation
         exclude = ['id', 'scenario']
 
+    def validate_days_in_year(self, value):
+        if value not in (365, 366):
+            raise serializers.ValidationError("Days in year must be either 365 or 366.")
+        return value
+
+    def validate_hours_in_day(self, value):
+        if value < 1 or value > 24:
+            raise serializers.ValidationError("Hours in day must be between 1 and 24.")
+        return value
+
     def validate_industry_library_inputs(self, value):
         if not isinstance(value, dict):
             raise serializers.ValidationError("Industry library inputs must be an object keyed by industry scope.")

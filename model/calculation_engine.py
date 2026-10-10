@@ -219,8 +219,10 @@ class CalculationEngine:
             raise CalculationInputError("The forecast must include at least one operating year.")
         if project.total_capacity is None or project.total_capacity <= 0:
             raise CalculationInputError("Project rated capacity must be greater than zero.")
-        if project.days_in_year <= 0:
-            raise CalculationInputError("Days in year must be greater than zero.")
+        if project.days_in_year not in (365, 366):
+            raise CalculationInputError("Days in year must be either 365 or 366.")
+        if project.hours_in_day < 1 or project.hours_in_day > 24:
+            raise CalculationInputError("Hours in day must be between 1 and 24.")
 
         drawdowns = [
             capex.year_1_drawdown_pct,

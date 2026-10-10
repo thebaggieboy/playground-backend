@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from datetime import date
 from types import SimpleNamespace
 from rest_framework.exceptions import ValidationError
+from rest_framework.test import APIClient
 from .models import (
     CapitalExpenditure,
     CalculatedStatement,
@@ -27,6 +28,63 @@ from .calculation_engine import (
 from .serializers import ProjectInformationSerializer
 
 User = get_user_model()
+
+
+class ModelGenerationApiTestCase(TestCase):
+    def test_create_returns_model_and_default_scenario_ids(self):
+        user = User.objects.create_user(email='generation@test.com', password='password')
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.post(
+            '/api/models/',
+            {'name': 'Generation contract test', 'project_type': 'manufacturing'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertIsNotNone(response.data.get('id'))
+        self.assertEqual(len(response.data.get('scenarios', [])), 1)
+        self.assertEqual(response.data['scenarios'][0]['scenario_type'], 'base')
+        self.assertIsNotNone(response.data['scenarios'][0].get('id'))
+
+        scenario_id = response.data['scenarios'][0]['id']
+        invalid_input_response = client.patch(
+            f'/api/scenarios/{scenario_id}/',
+            {'project_info': {'days_in_year': 367}},
+            format='json',
+        )
+        self.assertEqual(invalid_input_response.status_code, 400, invalid_input_response.data)
+        self.assertIn(
+            'Days in year must be either 365 or 366.',
+            str(invalid_input_response.data),
+        )
+
+        save_response = client.patch(
+            f'/api/scenarios/{scenario_id}/',
+            {
+                'name': 'Base Case',
+                'scenario_type': 'base',
+                'model': response.data['id'],
+            },
+            format='json',
+        )
+
+        self.assertEqual(save_response.status_code, 200, save_response.data)
+        self.assertEqual(save_response.data['id'], scenario_id)
+
+    def test_project_information_api_rejects_invalid_calendar_assumptions(self):
+        project_info = ProjectInformationSerializer()
+
+        with self.assertRaisesRegex(ValidationError, "Days in year must be either 365 or 366"):
+            project_info.validate_days_in_year(367)
+
+        with self.assertRaisesRegex(ValidationError, "Hours in day must be between 1 and 24"):
+            project_info.validate_hours_in_day(25)
+
+        self.assertEqual(project_info.validate_days_in_year(366), 366)
+        self.assertEqual(project_info.validate_hours_in_day(24), 24)
+
 
 class CalculationEngineTestCase(TestCase):
     def setUp(self):
@@ -170,6 +228,19 @@ class CalculationEngineTestCase(TestCase):
             transaction_costs_pct=3,
             valuation_method="Multiple-based",
         )
+
+        project_info = self.scenario.project_info
+        project_info.days_in_year = 367
+        project_info.save(update_fields=["days_in_year"])
+        with self.assertRaisesRegex(CalculationInputError, "Days in year must be either 365 or 366"):
+            CalculationEngine().calculate_scenario(self.scenario, user=self.user, save_results=False)
+        project_info.days_in_year = 366
+        project_info.hours_in_day = 25
+        project_info.save(update_fields=["days_in_year", "hours_in_day"])
+        with self.assertRaisesRegex(CalculationInputError, "Hours in day must be between 1 and 24"):
+            CalculationEngine().calculate_scenario(self.scenario, user=self.user, save_results=False)
+        project_info.hours_in_day = 24
+        project_info.save(update_fields=["hours_in_day"])
 
         result = CalculationEngine().calculate_scenario(
             self.scenario,
